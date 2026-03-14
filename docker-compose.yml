@@ -1,0 +1,141 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: qps_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qps_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-qps_pass123}
+      POSTGRES_DB: ${POSTGRES_DB:-qps_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - qps_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qps_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: qps_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - qps_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qps_backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-qps_user}:${POSTGRES_PASSWORD:-qps_pass123}@postgres:5432/${POSTGRES_DB:-qps_db}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-quantum-proof-super-secret-key-2026}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 1440
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - qps_network
+    volumes:
+      - scan_results:/app/scan_results
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qps_celery_worker
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q scans
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-qps_user}:${POSTGRES_PASSWORD:-qps_pass123}@postgres:5432/${POSTGRES_DB:-qps_db}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-quantum-proof-super-secret-key-2026}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - qps_network
+    volumes:
+      - scan_results:/app/scan_results
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qps_celery_beat
+    command: celery -A app.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-qps_user}:${POSTGRES_PASSWORD:-qps_pass123}@postgres:5432/${POSTGRES_DB:-qps_db}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-quantum-proof-super-secret-key-2026}
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - qps_network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: qps_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - qps_network
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    container_name: qps_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - qps_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  scan_results:
+
+networks:
+  qps_network:
+    driver: bridge

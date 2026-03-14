@@ -1,0 +1,10 @@
+INFO:     Will watch for changes in these directories: ['/app']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [1] using WatchFiles
+INFO:     Started server process [8]
+INFO:     Waiting for application startup.
+INFO:app.main:Starting Quantum-Proof Systems Scanner API...
+INFO:app.main:✅ Database ready, default users seeded.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:59354 - "POST /api/scans HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:42522 - "POST /api/scans HTTP/1.1" 401 Unauthorized

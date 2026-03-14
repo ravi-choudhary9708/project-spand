@@ -1,0 +1,798 @@
+=== PAGE 1 ===
+Date:
+Software Requirement Specification (SRS)
+PSB Hackathon 2026
+Software Requirement Specification
+Version 1
+Project Name: Quantum-Proof Systems Scanner
+Team Name: Spand
+Institute Name: GEC Madhubani
+=== PAGE 2 ===
+Revision History
+Prepared
+Version No Date Significant Changes
+by/Modified by
+Draft V1.0
+Declaration
+The purpose of this Software Requirements Specification (SRS) document is to identify
+and document the user requirements for the Quantum-Proof Systems Scanner The end
+deliverable software that will be supplied by Spand will comprise of all the requirements
+documented in the current document and will be operated in the manner specified in the
+document. The Source code will be developed subsequently based on these requirements
+and will formally go through code review during testing process.
+Mentor Details :
+Institute Name GEC Madhubani
+Signature:
+abuzar
+Date: 12/03/26
+md. abuzar, professor
+Name & Title
+Team Member Details:
+Member 3
+Member 2 Member 4
+Member 1
+Institute Name:
+Institute Name: Institute Name:
+Institute Name:
+gec madhubani
+gec madhubani gec madhubani
+gec madhubani
+Signature: muskan
+Signature: purnima Signature: gautam
+Signature: Ravi
+Date: 13/03/26 Date: 13/03/26
+Date: 13/03/26 Date: 13/03/26
+Name: Name:
+Name: Name:
+Ravi choudhary purnima kumari
+muskan kumari Gautam singhal
+Team Lead Developer Tester design research
+=== PAGE 3 ===
+Table of Content
+1. Introduction
+1.1 Purpose
+1.2 Scope
+1.3 Intendent Audience
+2. Overall Description
+2.1 Product Perspective
+2.2 Product Functions
+2.3 User Classes and Characteristics
+2.4 Operating Environment
+2.5 Design and Implementation Constraints
+2.6 Assumptions and Dependencies
+3. Specific Requirements
+3.1 Functional Requirements
+3.2 External Interface Requirements
+3.2.1 User Interfaces
+3.2.2 Hardware Interfaces
+3.2.3 Software/ Communication Interfaces
+3.3 System Features
+3.4 Non-functional Requirements
+3.4.1 Performance Requirements
+3.4.2 Software Quality Attributes
+3.4.3 Other Non-functional Requirements
+4. Technological Requirements
+4.1 Technologies used in development of the web application
+4.2 I.D.E. (Integrated Development Environment)
+4.3 Database Management Software
+5. Security Requirements
+=== PAGE 4 ===
+Software Requirement Specification (SRS)
+(cid:0) Introduction
+1.1 Purpose
+The purpose of this Software Requirements Specification (SRS)
+document is to identify and document the user requirement for
+Quantum-Proof Systems Scanner
+This document is prepared with the following objectives:
+(cid:0) To provide behaviour of the system
+(cid:0) To provide Process Flow charts
+1.2 Scope
+(cid:0) Discover cryptographic inventory (TLS certificates, VPN endpoints, APIs).
+(cid:0) Identify cryptographic controls (cipher suites, key exchange mechanisms, TLS
+versions).
+(cid:0) Validate whether deployed algorithms are quantum-safe.
+(cid:0) Generate actionable recommendations for non-PQC ready assets.
+(cid:0) Issue digital labels: Quantum-Safe, PQC Ready, or Fully Quantum Safe.
+(cid:0) Enterprise wide console for Central management: A GUI console to display
+status of scanned systems (public facing applications) covering details
+mentioned in Appendix-A (Cert-In CBOM Elements). As per the variation of
+score (like High, Medium, Low rating etc) for any public applications, dashboard
+should display that change as well.
+1.3Intended Audience
+The intended audience of this document is business and technical
+users from PNB.
+=== PAGE 5 ===
+(cid:0) Overall Description
+2.1 Product Perspective
+The proposed system is a Quantum-Safe Cryptographic Inventory Scanner designed
+to identify and analyze cryptographic implementations used in public-facing applications
+such as web servers, APIs, and TLS-based services.
+The system evaluates cryptographic implementations used in services such as web
+servers, APIs, email servers, file transfer services, and VPN endpoints. It extracts
+cryptographic configurations, evaluates their resistance to quantum attacks, and
+generates a Cryptographic Bill of Materials (CBOM) to assist organizations in preparing
+for the transition to Post-Quantum Cryptography (PQC)
+The following context diagram illustrates the system's position within its environment
+and its interactions with external entities:
+Network
+DNS scanning tools
+infrastructure
+TLS
+Public
+analysis tools
+Quantam Proof
+Web Servers
+System Scanner
+Internal
+Public certificate
+analysis modules
+transparency logs
+Email / Webhooks
+evaluate cryptographic algorithms
+and determine quantum vulnerability
+2.2 Product Functions
+The Quantum-Proof Systems Scanner provides the following core functionalities.
+1.Asset Input and Discovery
+The system accepts a manual list of assets provided by the organization, such as domains, URLs, or IP
+addresses. In addition to manual input, the system performs automated asset discovery to identify additional
+publicly exposed services using:
+Certificate-associated domains
+subdomains
+Mail and DNS infrastructure hints
+Both manually provided and automatically discovered assets are merged to ensure that no exposed system is missed.
+2. Asset Validation and Scope Enforcement
+The system verifies that all assets fall within the authorized scanning scope.
+This ensures that the scanner operates within authorized security testing boundaries.
+3.DNS Resolution
+The system resolves all discovered assets into IP addresses using DNS queries.
+The module performs:
+A record resolution, AAAA record resolution, IP deduplication
+=== PAGE 6 ===
+4.CDN and WAF Detection
+The system identifies whether the target infrastructure is protected by a Content Delivery Network (CDN)
+or Web Application Firewall (WAF).
+If CDN protection is detected, the system marks the TLS configuration as Edge TLS and attempts to
+identify alternative origins through passive discovery.
+5.Service Discovery
+The system performs network scanning to identify exposed services on the discovered assets.
+Service discovery is conducted using Nmap, targeting commonly used secure service ports
+The discovered open ports and services are recorded in the asset database.
+6.Protocol Detection
+The system analyzes each discovered service to determine the communication protocol used.
+Supported protocol detection includes:
+HTTPS and web APIs
+SMTP and STARTTLS email servers
+IMAP and POP3 email retrieval services
+FTPS file transfer services
+SSH remote access services
+VPN endpoints
+Each asset is classified according to its service category, such as web, API, mail, file transfer, or VPN.
+7.Protocol-Aware Cryptographic Scanning
+The system performs protocol-specific cryptographic analysis using specialized scanning modules.
+Examples include:
+HTTPS scanning using TestSSL and SSLyze
+SMTP STARTTLS cryptographic inspection
+IMAP and POP3 TLS configuration analysis
+FTPS cipher and TLS inspection
+SSH cryptographic algorithm auditing
+VPN TLS configuration analysis
+These modules extract encryption parameters used by each protocol.
+8.Cryptographic Data Extraction
+The system parses scan results to extract detailed cryptographic parameters, including:
+TLS protocol versions
+Cipher suites
+Key exchange algorithms
+Certificate chains
+Key sizes
+Signature algorithms
+This information forms the basis of the organization’s cryptographic inventory.
+9.Quantum Risk Assessment
+The system evaluates extracted cryptographic algorithms to determine their vulnerability to quantum
+computing attacks.
+Algorithms such as:
+RSA
+Elliptic Curve Cryptography (ECC)
+Diffie-Hellman
+are flagged as quantum vulnerable.
+The system calculates a Harvest-Now-Decrypt-Later (HNDL) risk score for each asset using multiple
+factors such as algorithm strength, key size, and certificate lifetime.
+=== PAGE 7 ===
+10.Compliance Mapping
+The system maps discovered cryptographic configurations to relevant cybersecurity frameworks and
+standards.
+Findings are correlated with:
+RBI cybersecurity directions
+NIST Post-Quantum Cryptography guidance
+NIST IR 8547 PQC readiness model
+CERT-In security advisories
+This enables organizations to assess their regulatory compliance posture.
+11.Cryptographic Correlation and Inventory Management
+The system aggregates cryptographic findings across all scanned assets to create an organization-wide
+cryptographic inventory.
+Examples include identifying:
+Number of systems using RSA-2048
+Services using outdated TLS versions
+Assets requiring PQC migration
+This provides visibility into cryptographic usage across the entire organization.
+12.Cryptographic Bill of Materials (CBOM) Generation
+The system generates a structured Cryptographic Bill of Materials (CBOM).
+The CBOM lists all cryptographic components used by each asset, including:
+Protocol type
+Encryption algorithms
+Key sizes
+Certificates
+Risk classification
+The CBOM is exported using the CycloneDX standard format.
+13.Scan Comparison and Change Detection
+The system compares current scan results with historical scans stored in the database.
+This enables detection of:
+Newly introduced vulnerabilities
+Cryptographic upgrades
+Security regressions
+This feature allows organizations to track changes in their cryptographic posture over time.
+14. PQC Readiness Assessment
+The system evaluates the organization’s readiness for Post-Quantum Cryptography adoption.
+Each asset receives a readiness classification such as:
+Quantum Safe
+Partially Safe
+Vulnerable
+Critical Risk
+The system also calculates an organization-level PQC readiness score.
+15.Reporting and Visualization
+The system provides multiple reporting and visualization capabilities.
+Available outputs include:
+Interactive security dashboard
+PDF and HTML security reports
+CBOM export files
+Compliance reports
+Email and webhook alerts
+These reports provide actionable insights for security teams and auditors.
+16.Continuous Monitoring and Automated Rescanning
+=== PAGE 8 ===
+2.3User Classes and Characteristics
+User Class Expertise Level Primary Interaction
+Analyze vulnerabilities and
+Security Analysts High
+cryptographic risks
+Review compliance and
+Compliance Officers Medium
+regulatory reports
+System Administrators High Implement remediation actions
+Monitor alerts and security
+SOC Teams High
+posture
+Organizational
+Low View high-level security reports
+Management
+2.4 Operating Environment
+The operating environment for the Quantum-Proof Systems Scanner as listed below.
+server system
+The system is designed to run on a Linux-based server environment and interacts with
+external network services during the scanning process.
+Operating system
+The system is designed to run on a Linux operating system and uses several open-source tools for scanning
+and analysis.
+Recommended operating system:
+Ubuntu Linux (20.04 or later)
+Debian-based Linux distributions
+Database:
+The system stores scan results and cryptographic inventory data in a database.
+Supported database systems include:
+SQLite (for prototype deployments)
+PostgreSQL (for production environments)
+Platform
+The system operates on a Linux server platform, which provides the necessary environment
+for running network scanning tools and backend services.
+=== PAGE 9 ===
+2.5 Design and Implementation Constraints
+Technical Constraints (For Deployment)
+Network Configuration
+The application must support both public and private network addressing.
+The scanning engine requires outbound internet access to connect to target assets.
+Firewall rules must allow controlled outbound connections to external hosts on
+relevant ports.
+Network rate limiting must be implemented to prevent excessive traffic during
+scanning.
+Hosting Environment
+The system should support deployment in secure organizational environments,
+including:
+On-premise security monitoring servers
+Virtual machines within enterprise networks
+Cloud-based infrastructure
+The system should also support restricted environments such as intranet
+deployments for internal monitoring.
+Containerized deployment using Docker should be supported to simplify installation
+and portability.
+Security Constraints
+Acc ess Control
+The system must implement Role-Based Access Control (RBAC) to restrict access to
+authorized users.
+User roles may include:
+Security Analyst
+Compliance Officer
+System Administrator
+Monitoring Operator
+Data Protection and Encryption
+All communications between the system and the web dashboard must be secured
+using HTTPS encryption.
+Sensitive scan results stored in the database must be protected using secure storage
+mechanisms.
+Authentication credentials and API keys must be securely stored and managed.
+The system must only perform scans on authorized targets provided by the
+organization.
+Performance Constraints
+The system must be capable of scanning multiple assets without negatively impacting
+network stability or system performance.
+Failover Mechanisms
+To ensure reliability, the system must include mechanisms for handling failures.
+These include:
+automatic retry for failed scans
+logging and error reporting for failed modules
+database backup and recovery mechanisms
+=== PAGE 10 ===
+4. User Interface Constraints
+4.1 User Experience Consistency
+Uniform layout and menu structure across modules.
+Consistent visual elements such as icons, buttons, and color schemes.
+Standardized navigation workflow for accessing scans, reports, and dashboards.
+Compliance and Standards Constraints
+comply with NIST Post-Quantum Cryptography standards
+support NIST IR 8547 PQC readiness assessment models
+provide mappings to relevant regulatory frameworks when generating reports
+Reporting Interface Constraints
+The system must generate reports in machine-readable and interoperable formats.
+Supported output formats include:
+JSON
+XML
+CSV
+CycloneDX CBOM format
+These formats enable integration with external security tools and compliance systems.
+Operational Safety Constraints
+The scanner must operate only on public-facing applications.
+The system must not disrupt live banking services or production infrastructure.
+Scanning must follow controlled rate limits to avoid excessive load on target systems.
+The platform must prevent unauthorized scanning of external infrastructure.
+2.6 Assumptions and Dependencies
+Assumptions
+Users will access the system through HTML5-compliant web browsers such as Google
+Chrome, Mozilla Firefox, or Microsoft Edge.
+Most public-facing services within the organization use TLS-based secure
+communication protocols (e.g., HTTPS, SMTPS, IMAPS, FTPS).
+The organization provides authorization to scan its public-facing infrastructure.
+The scanning server has stable internet connectivity to access target assets.
+Target infrastructure uses standard networking protocols and ports, enabling automated
+service detection.
+Dependencies
+Database System – PostgreSQL or SQLite for storing assets, scan results, and historical
+records.
+Security Scanning Tools – Nmap, TestSSL, SSLyze, OpenSSL, and Subfinder for
+discovery and cryptographic analysis.
+External Data Sources – Certificate Transparency logs, DNS resolution services, and
+ASN lookup services.
+Post-Quantum Cryptography Standards – Updates from NIST PQC standardization
+processes for algorithm risk evaluation.
+Network Access – Outbound network access must be available to perform scans on
+authorized target systems.
+=== PAGE 11 ===
+Specific Requirements
+3.1 Functional Requirements
+This section details the functional requirements of the Quantum-Proof Systems,
+organized by major system features. Each requirement is identified with a unique ID (FR-
+XX) for traceability and reference.
+ID REQUIREMENT
+The system shall accept a list of assets (domains, URLs, or IP addresses) provided by the organization.
+FR-01 The system shall automatically discover additional assets using subdomain enumeration, certificate transparency logs,
+and DNS records.
+The system shall validate that assets fall within the authorized scanning scope.
+FR-02
+The system shall remove duplicate assets before scanning.
+The system shall resolve domain names into IP addresses using DNS queries.
+FR-03
+The system shall support A, AAAA, and CNAME record resolution.
+The system shall detect whether an asset is protected by a CDN or WAF.
+FR-04
+The system shall label TLS connections as Edge TLS if the asset is protected by CDN infrastructure.
+The system shall perform service discovery using Nmap.
+FR-05 The system shall identify open ports related to secure services such as HTTPS, SMTP, IMAPS, FTPS,
+SSH, and VPN endpoints.
+The system shall determine the protocol running on each discovered service.
+FR-06
+Supported protocols include HTTPS, SMTP (STARTTLS), IMAP, POP3, FTPS, SSH, and VPN services.
+The system shall perform protocol-aware cryptographic scanning using tools such as TestSSL and SSLyze.
+FR-07 The scanner shall extract TLS configurations including cipher suites, TLS versions, certificates, and key
+exchange algorithms.
+The system shall parse scan results to identify cryptographic parameters such as cipher
+FR-08
+suites, key sizes, certificate chains, and signature algorithms.
+The system shall analyze cryptographic algorithms and identify those vulnerable to quantum attacks.
+The system shall calculate an HNDL (Harvest Now Decrypt Later) risk score for each asset.
+FR-09
+HNDL Risk Score (0–10) = (Algorithm Vulnerability Score × 0.40)+ (Key Size Risk Score × 0.20)+ (Data Sensitivity Weight × 0.30) + (Certificate Expiry Risk ×
+0.10)
+The system shall store discovered cryptographic information in a centralized inventory database.
+FR-10
+The system shall maintain historical scan records.
+The system shall generate a Cryptographic Bill of Materials (CBOM) listing cryptographic components
+FR-11 used by each asset.
+The CBOM shall be generated in CycloneDX format.
+FR-12 The system shall map findings to relevant cybersecurity guidelines including NIST PQC standards and
+CERT-In recommendations.
+The system shall evaluate each asset’s readiness for Post-Quantum Cryptography.
+FR-13
+The system shall assign classifications such as Quantum Safe, Partially Safe, Vulnerable, or Critical.
+The system shall support periodic rescanning of assets.
+FR-14
+The system shall compare current scan results with historical scans to detect security regressions.
+The system shall provide dashboards and reports showing cryptographic
+FR-15
+inventory, risk scores, and PQC readiness metrics.
+The system shall provide automated remediation recommendations for cryptographic vulnerabilities
+FR-16
+detected during scanning.
+Priority Score = Risk Score × Asset Criticality
+=== PAGE 12 ===
+3.2 External Interface Requirements
+3.2.1 User Interfaces
+The system shall provide a web-based user interface accessible through standard web browsers such as Google Chrome,
+Mozilla Firefox, and Microsoft Edge.
+The user interface shall allow users to:
+input target assets for scanning
+monitor scan progress
+view discovered assets and services
+review cryptographic risk assessments
+access PQC readiness dashboards
+download reports and CBOM files
+provide remediation steps
+The interface shall present information in a clear and structured format using tables, charts, and dashboards.
+3.2.2 Hardware Interfaces
+The system shall operate on standard server hardware and does not require specialized hardware interfaces.
+The scanning server must have:
+internet connectivity
+sufficient CPU and memory resources
+network access to target systems.
+3.2.3 Software Interfaces
+The system interacts with several external software tools and libraries, including:
+Nmap for service discovery
+TestSSL for TLS analysis
+SSLyze for certificate and TLS scanning
+OpenSSL for protocol inspection
+Subfinder for asset discovery
+The backend application integrates these tools through system calls and parses their outputs for analysis.
+3.2.4 Communication Interfaces
+The sy stem interacts with several external software tools and libraries, including:
+Nmap for service discovery
+TestSSL for TLS analysis
+SSLyze for certificate and TLS scanning
+OpenSSL for protocol inspection
+Subfinder for asset discovery
+The backend application integrates these tools through system calls and parses their outputs for analysis.
+3.3 System Features
+1. Asset Discovery and Management
+The system automatically identifies public-facing assets belonging to an organization. It combines manually provided asset
+lists with automated discovery techniques to ensure comprehensive asset coverage.
+The system shall:
+accept asset lists provided by the organization
+perform automated asset discovery using subdomain enumeration
+query Certificate Transparency logs to identify domains associated with certificates
+analyze DNS records such as MX and SPF
+merge and deduplicate discovered assets
+validate assets against authorized scanning scope
+This feature ensures that no exposed infrastructure is missed during scanning.
+2.Service Discovery and Protocol Identification
+The system identifies active services and determines which protocols are running on discovered assets.
+The system shall:
+perform service discovery using Nmap
+identify open ports related to secure services
+determine the protocol running on each open service
+classify services as web servers, APIs, mail servers, file transfer services, or VPN endpoints
+3. Protocol-Aware Cryptographic Scanning
+The system analyzes cryptographic configurations used by each discovered service.
+The system shall:
+perform TLS configuration analysis using TestSSL and SSLyze
+inspect certificates and cryptographic parameters
+identify TLS versions and supported cipher suites
+analyze key exchange mechanisms and signature algorithms
+=== PAGE 13 ===
+4. Quantum Risk Assessment
+The system evaluates cryptographic configurations to determine their vulnerability to quantum computing attacks.
+Functional Behavior
+The system shall:
+detect cryptographic algorithms vulnerable to quantum attacks (e.g., RSA, ECC)
+calculate a Harvest-Now-Decrypt-Later (HNDL) risk score
+evaluate cryptographic strength based on algorithm type and key size
+prioritize vulnerabilities based on calculated risk levels
+5. Cryptographic Inventory and Correlation
+The system aggregates cryptographic findings across all scanned assets to build an organization-wide cryptographic inventory.
+The system shall:
+store cryptographic data in an inventory database
+track certificates, cipher suites, and algorithms
+correlate cryptographic usage across multiple systems
+generate statistics on algorithm usage across the organization
+6. Compliance Mapping
+The system maps discovered cryptographic configurations to relevant cybersecurity standards and regulatory guidelines.
+The system shall:
+compare findings against NIST post-quantum cryptography guidance
+map vulnerabilities to CERT-In security advisories
+support compliance assessment with relevant cybersecurity policies
+7.AI-Assisted Remediation Guidance
+The system provides automated remediation recommendations for detected cryptographic vulnerabilities.
+The system shall:
+analyze detected vulnerabilities
+generate recommended configuration improvements
+produce remediation playbooks describing steps required to fix vulnerabilities
+prioritize remediation based on risk severity
+8. Continuous Monitoring
+The system continuously monitors cryptographic configurations through periodic rescanning.
+The system shall:
+schedule automated rescans of assets
+compare scan results with historical records
+detect newly introduced vulnerabilities
+identify security regressions
+9. CBOM Generation and Reporting
+The system generates detailed reports describing the cryptographic components used across the organization.
+The system shall:
+generate a Cryptographic Bill of Materials (CBOM)
+export CBOM in CycloneDX format
+produce security reports in PDF and HTML formats
+provide interactive dashboards displaying risk metrics
+3.4 Non-functional Requirements
+3.4.1 Performance Requirements
+The system must operate efficiently while scanning multiple public-facing assets without overloading network resources.
+The following performance requirements apply:
+The system shall support scanning multiple assets concurrently using controlled parallel scanning.
+The scanning engine shall implement rate limiting to avoid overwhelming target servers.
+The system shall complete scanning of small asset sets within a reasonable time frame.
+The system shall support scheduled and automated scans without manual intervention.
+The system shall store scan results and cryptographic findings in the database with minimal delay.
+The system shall support efficient retrieval of historical scan data for comparison and reporting.
+3.4.2 Software Quality Attributes
+The system must maintain high standards of reliability, security, and maintainability.
+Reliability
+The system shall log all scanning operations and system events.
+The system shall retry failed scans when temporary network issues occur.
+The database shall store historical scan results to ensure persistence of data.
+Security
+Access to the system shall be restricted using Role-Based Access Control (RBAC).
+All web interface communication shall be secured using HTTPS encryption.
+Only authorized targets within the defined scope shall be scanned.
+=== PAGE 14 ===
+Maintainability
+The system architecture shall be modular to allow easy updates to scanning modules.
+New protocol scanners or cryptographic analysis modules can be added without major system
+redesign.
+Scalability
+The system shall support scanning of multiple domains and assets.
+The system shall support expansion of the asset inventory database as the number of scanned
+assets increases.
+Usability
+The system dashboard shall provide clear visualizations of cryptographic risks.
+Reports shall present information in a structured and understandable format.
+3.4.3 Other Non-Functional Requirements
+Additional constraints related to operation and compliance include:
+Compliance
+The system shall align with recognized cybersecurity standards and post-quantum cryptography guidelines.
+Interoperability
+The system shall generate reports in machine-readable formats, including JSON, XML, and CSV.
+The system shall support CycloneDX CBOM format for cryptographic inventory reporting.
+Operational Safety
+The scanner shall operate only on public-facing applications and authorized assets.
+The scanning process must not disrupt normal operation of banking services.
+Monitoring and Logging
+The system shall maintain logs of scanning activities, detected vulnerabilities, and system events.
+Logs shall be accessible for auditing and troubleshooting purposes.
+4. Technological Requirements
+4.1 Technologies used in development of the web application
+The syst em is developed using modern web and backend technologies that support scalable security scanning and
+data analysis.
+The primary technologies include:
+Backend Technologies
+Python – Used for implementing the scanning engine, cryptographic analysis modules, and risk assessment
+algorithms.
+FastAPI / Flask – Used to build REST APIs for communication between system modules and the dashboard.
+Frontend Technologies
+HTML5 – Structure of the web interface.
+CSS3 – Styling and layout of the dashboard.
+JavaScript – Interactive user interface behavior.
+React.js – Used for building dynamic dashboard components.
+Security Scanning Tools
+The application integrates several external security tools to perform scanning and cryptographic analysis:
+Nmap – Network service discovery and port scanning.
+TestSSL – TLS configuration analysis.
+SSLyze – TLS and certificate inspection.
+OpenSSL – Protocol-level cryptographic inspection.
+Subfinder – Asset discovery through subdomain enumeration.
+4.2 I.D.E. (Integrated Development Environment)
+Visual Studio Code (VS Code) – Primary IDE used for backend and frontend development.
+PyCharm – Used for Python development and debugging.
+Git – Version control system used for managing source code.
+4.3 Database Management Software
+Supported database systems include:
+SQLite
+Used for prototype or small-scale deployments.
+Lightweight and easy to deploy.
+PostgreSQL
+Used for production deployments.
+Supports large datasets and concurrent access.
+Suitable for storing asset inventories, scan results, and historical data.
+=== PAGE 15 ===
+5. Security Requirements
+5.1 Access Control
+The system shall implement Role-Based Access Control (RBAC) to restrict access to authorized users.
+5.2 Authentication and Authorization
+The system shall require secure authentication for all users accessing the dashboard.
+Authentication mechanisms may include:
+username and password authentication
+secure session management
+optional multi-factor authentication for administrators
+5.3 Secure Communication
+All communication between users and the system must be protected using HTTPS encryption.
+Security requirements include:
+TLS encryption for all web dashboard communication
+secure API communication between system components
+protection against man-in-the-middle attacks
+5.4 Authorized Scanning
+The system must enforce strict controls to ensure that scanning operations are performed only on authorized
+assets.
+Security controls include:
+validation of target domains and IP addresses
+allowlist-based scanning scope
+prevention of unauthorized or external target scanning
+5.5 Data Protection
+The system shall protect stored data and sensitive information.
+Security measures include:
+secure storage of scan results and asset inventories
+restricted access to database records
+protection of API keys and credentials
+5.6 Logging and Audit Trails
+The system shall maintain detailed logs of all system operations.
+Logs shall record:
+user login activities
+scan initiation and completion
+detected vulnerabilities
+system errors and alerts
+5.7 System Integrity Protection
+The system shall ensure that scanning modules and analysis components cannot be tampered with by unauthorized
+users.
+Measures include:
+restricted access to system configuration files
+secure update mechanisms for scanning tools
+validation of system modules before execution
+=== PAGE 16 ===
+DFD LEVEL 0 DIAGRAM
+E1 Organisation
+PNB / Bank
+Asset list ·
+scan config Risk reports
+alerts
+E2 Target infra.
+Quantam proof
+TLS · E3 Security Analyst
+Web · API · Mail · cert ·
+DNS data system scanner Reviews findings
+VPN Public I nterne
+scan
+trigger
+CBOM
+compliance report
+E4 Regulators
+RBI · NIST · CERT-In
+=== PAGE 17 ===
+Asset list
+E1 Organisation config E2 public
+P1 Asset Discovery Engine
+PNB / Bank internet
+merged asset list
+P2 Asset Merge and Dedup
+scoped assets
+P3 Scope and Auth Gate
+P4 DNS resolution and Dedup
+resolved IP
+P5 CDN/WAF Detection
+CDN Free IP
+P6 Service DIiscover
+open ports
+P7 Protocol Detection
+P8 Prototcol Aware Crypto Scanner
+raw TLS data
+P9 Crypto Parsing Engine
+parsed crypto
+P10 Quantam Risk Engine
+HNDL score DFD LEVEL 1
+P11 AI Remediation Engine
+DIAGRAM
+remediation plan
+P12 Compliance Mapping
+P13 Crypto Correlation Engine
+P14a CBOM P14b
+Generator Diff Engine
+P15 PQC Readiness Engine
+P16 Continuos Monitoring
+E3 Security Analyst E4 Regulators
+Reviews findings risk CBOM, RBI · NIST · CERT-In
+reports P17 Output Layer PQC Badge
+=== PAGE 18 ===
+Analyst Discovery Scanning Risk & Output
+start
+workflow
+diagram
+Define Scope
+NO
+Manual List
+Auto Discover
+YES
+Merge and Dedup
+CDN Bypass
+or label
+NO
+Authorized
+Nmap Scan
+YES
+Log Events DNS Resolution
+HNDL Scoring
+Protocol Detect
+YES
+CDN/WAF
+AI Remidition
+Crypto Scan
+NO
+Compliance Map
+Crypto Parse
+PQC Readiness
+CBOM Report
+Send Alerts
+Schedule Rescan
+YES
+Changes
+NO
+END
+=== PAGE 19 ===
+ScanJob
+UML
+scanId : UUID
+orgName : String+
+DIAGRAM
+startedAt : DateTime
+status : ScanStatus
+authorized : Boolean
+generates
+Asset
+Certificate
+assetId : UUID
+certId : UUID
+domain : String
+subject : String
+resolvedIP : String+
+issuer : String
+protocol : ProtocolType+
+algorithm : String
+isCDN : Boolean+
+keySize : Integer+
+hndlScore : Float
+expiresAt : Date+
+isPQC : Boolean
+Finding
+CipherSuite
+findingId : UUID+
+type : FindingType
+suiteId : UUID
+severity : String trigger
+name : String
+hndlScore : Float
+tlsVersion : String
+cweId : String
+keyExchange : String
+remediation : Text
+quantumRisk : Float
+CBOM ComplianceTag
+Remediation
+cbomId : UUID tagId : UUID
+playbookId : UUID
+format : String framework : String
+priority : Integer
+generatedAt : DateTime controlRef : String
+steps : Text[]
+status : ComplianceStatus
+=== PAGE 20 ===
+[NO TEXT]
+=== PAGE 21 ===
+[NO TEXT]
