@@ -123,11 +123,11 @@ def is_quantum_vulnerable(algorithm: str) -> bool:
 
 
 def get_pqc_readiness_label(hndl_score: float) -> str:
-    if hndl_score <= 2.0:
+    if hndl_score <= 3.0:
         return "Quantum Safe"
-    elif hndl_score <= 4.5:
+    elif hndl_score <= 5.5:
         return "Partially Safe"
-    elif hndl_score <= 7.5:
+    elif hndl_score <= 7.8:
         return "Vulnerable"
     else:
         return "Critical Risk"
