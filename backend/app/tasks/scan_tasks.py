@@ -315,9 +315,69 @@ def _generate_scan_cbom(db, scan_job, processed_assets):
 
     try:
 
+        # Query full asset data from DB for the CBOM generator
+        full_assets = []
+        assets = db.query(Asset).filter(Asset.scan_id == scan_job.scan_id).all()
+
+        for asset in assets:
+            certs = db.query(Certificate).filter(Certificate.asset_id == asset.asset_id).all()
+            suites = db.query(CipherSuite).filter(CipherSuite.asset_id == asset.asset_id).all()
+            findings = db.query(Finding).filter(Finding.asset_id == asset.asset_id).all()
+
+            full_assets.append({
+                "asset_id": asset.asset_id,
+                "domain": asset.domain,
+                "hndl_score": asset.hndl_score,
+                "is_pqc": asset.is_pqc,
+                "pqc_readiness": asset.pqc_readiness.value if asset.pqc_readiness else "Vulnerable",
+                "is_cdn": asset.is_cdn,
+                "is_waf": asset.is_waf,
+                "open_ports": asset.open_ports or [],
+                "resolved_ips": asset.resolved_ips or [],
+                "protocol": asset.protocol.value if asset.protocol else "UNKNOWN",
+                "service_category": asset.service_category,
+                "certificates": [
+                    {
+                        "cert_id": c.cert_id,
+                        "subject": c.subject,
+                        "issuer": c.issuer,
+                        "algorithm": c.algorithm,
+                        "key_size": c.key_size,
+                        "hndl_score": c.hndl_score,
+                        "expires_at": c.expires_at.isoformat() if c.expires_at else None,
+                        "is_pqc": c.is_pqc,
+                    }
+                    for c in certs
+                ],
+                "cipher_suites": [
+                    {
+                        "name": s.name,
+                        "tls_version": s.tls_version,
+                        "key_exchange": s.key_exchange,
+                        "quantum_risk": s.quantum_risk,
+                        "is_quantum_vulnerable": s.is_quantum_vulnerable,
+                    }
+                    for s in suites
+                ],
+                "findings": [
+                    {
+                        "finding_id": f.finding_id,
+                        "type": f.type.value if hasattr(f.type, "value") else f.type,
+                        "severity": f.severity,
+                        "hndl_score": f.hndl_score,
+                        "cwe_id": f.cwe_id,
+                        "title": f.title,
+                        "description": f.description,
+                        "remediation": f.remediation,
+                        "quantum_risk": f.quantum_risk,
+                    }
+                    for f in findings
+                ],
+            })
+
         cbom_data = generate_cbom(
             {"scan_id": scan_job.scan_id, "org_name": scan_job.org_name},
-            processed_assets
+            full_assets
         )
 
         cbom = CBOM(

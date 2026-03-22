@@ -5,6 +5,7 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.database import get_db
 from app.models import User, UserRole
 from app.config import settings
@@ -29,7 +30,9 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
 
 
 def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    user = db.query(User).filter(User.username == username).first()
+    # Strip whitespace and make search case-insensitive to improve UX
+    clean_username = username.strip()
+    user = db.query(User).filter(func.lower(User.username) == clean_username.lower()).first()
     if not user or not verify_password(password, user.hashed_password):
         return None
     return user

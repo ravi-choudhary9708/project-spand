@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
 @router.get("")
+@router.get("/stats")
 async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     # Total scans
     total_scans = db.query(ScanJob).count()
@@ -33,22 +34,61 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
     high_findings = db.query(Finding).filter(Finding.severity == "HIGH").count()
     medium_findings = db.query(Finding).filter(Finding.severity == "MEDIUM").count()
     low_findings = db.query(Finding).filter(Finding.severity == "LOW").count()
+    total_findings = critical_findings + high_findings + medium_findings + low_findings
 
     # PQC readiness %
-    pqc_readiness_pct = round((quantum_safe / total_assets * 100) if total_assets > 0 else 0, 1)
+    pqc_ready_pct = round((quantum_safe / total_assets * 100) if total_assets > 0 else 0, 1)
+
+    # Risk distribution percentages for pie chart
+    critical_pct = round((critical / total_assets * 100) if total_assets > 0 else 0, 1)
+    vulnerable_pct = round((vulnerable / total_assets * 100) if total_assets > 0 else 0, 1)
+    partial_pct = round((partially_safe / total_assets * 100) if total_assets > 0 else 0, 1)
 
     # Compliance violations by framework
-    compliance_counts = {}
+    compliance = {}
     frameworks = ["NIST-PQC", "CERT-IN", "RBI", "NIST-IR-8547"]
     for fw in frameworks:
         count = db.query(ComplianceTag).filter(
             ComplianceTag.framework == fw,
             ComplianceTag.status == "NON_COMPLIANT"
         ).count()
-        compliance_counts[fw] = count
+        compliance[fw] = count
 
     # Recent scans
-    recent_scans = db.query(ScanJob).order_by(ScanJob.started_at.desc()).limit(5).all()
+    recent_scans_q = db.query(ScanJob).order_by(ScanJob.started_at.desc()).limit(5).all()
+    recent_scans = []
+    for s in recent_scans_q:
+        asset_count = db.query(Asset).filter(Asset.scan_id == s.scan_id).count()
+        scan_avg_hndl = db.query(func.avg(Asset.hndl_score)).filter(Asset.scan_id == s.scan_id).scalar()
+        scan_quantum_safe = db.query(Asset).filter(
+            Asset.scan_id == s.scan_id,
+            Asset.pqc_readiness == PQCReadiness.QUANTUM_SAFE
+        ).count()
+        scan_pqc_pct = round((scan_quantum_safe / asset_count * 100) if asset_count > 0 else 0, 1)
+        recent_scans.append({
+            "scan_id": s.scan_id,
+            "org_name": s.org_name,
+            "target_domain": (s.target_assets[0] if s.target_assets else s.org_name),
+            "status": s.status.value if s.status else "PENDING",
+            "total_assets": asset_count,
+            "avg_hndl": round(float(scan_avg_hndl), 2) if scan_avg_hndl else 0.0,
+            "pqc_ready_pct": scan_pqc_pct,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "initiated_by": None,
+        })
+
+    # Last scan date
+    last_scan_job = db.query(ScanJob).order_by(ScanJob.started_at.desc()).first()
+    last_scan = last_scan_job.started_at.isoformat() if last_scan_job and last_scan_job.started_at else None
+
+    # Algorithm breakdown (certificate algorithms)
+    algo_data = db.query(
+        Certificate.algorithm, func.count(Certificate.cert_id)
+    ).group_by(Certificate.algorithm).all()
+    algo_breakdown = [
+        {"algorithm": algo or "Unknown", "count": count}
+        for algo, count in algo_data
+    ]
 
     # HNDL distribution
     hndl_distribution = {
@@ -62,37 +102,35 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
     protocol_data = db.query(Asset.protocol, func.count(Asset.asset_id)).group_by(Asset.protocol).all()
 
     return {
-        "overview": {
-            "total_scans": total_scans,
-            "completed_scans": completed_scans,
-            "running_scans": running_scans,
-            "total_assets": total_assets,
-            "avg_hndl_score": round(float(avg_hndl), 2),
-            "pqc_readiness_percentage": pqc_readiness_pct,
-        },
+        # ── Flat fields for frontend KPI cards ──
+        "total_scans": total_scans,
+        "completed_scans": completed_scans,
+        "running_scans": running_scans,
+        "total_assets": total_assets,
+        "avg_hndl": round(float(avg_hndl), 2),
+        "pqc_ready_pct": pqc_ready_pct,
+        "critical_findings": critical_findings,
+        "high_findings": high_findings,
+        "medium_findings": medium_findings,
+        "low_findings": low_findings,
+        "total_findings": total_findings,
+        "last_scan": last_scan,
+
+        # ── Risk distribution percentages for pie chart ──
+        "critical_pct": critical_pct,
+        "vulnerable_pct": vulnerable_pct,
+        "partial_pct": partial_pct,
+
+        # ── Breakdowns ──
         "pqc_breakdown": {
             "quantum_safe": quantum_safe,
             "partially_safe": partially_safe,
             "vulnerable": vulnerable,
             "critical": critical,
         },
-        "findings_summary": {
-            "critical": critical_findings,
-            "high": high_findings,
-            "medium": medium_findings,
-            "low": low_findings,
-            "total": critical_findings + high_findings + medium_findings + low_findings,
-        },
-        "compliance": compliance_counts,
+        "compliance": compliance,
         "hndl_distribution": hndl_distribution,
+        "algo_breakdown": algo_breakdown,
         "protocol_distribution": [{"protocol": str(p), "count": c} for p, c in protocol_data],
-        "recent_scans": [
-            {
-                "scan_id": s.scan_id,
-                "org_name": s.org_name,
-                "status": s.status.value,
-                "started_at": s.started_at.isoformat(),
-            }
-            for s in recent_scans
-        ],
+        "recent_scans": recent_scans,
     }

@@ -1,9 +1,9 @@
 """
 Scans Router — QuantumShield API
-Place at: backend/app/routers/scans_router.py
 """
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 import uuid
 import datetime
@@ -11,13 +11,13 @@ import datetime
 from ..database import get_db
 from ..models.models import (
     ScanJob, ScanStatus, Asset, Finding, ComplianceTag,
-    RemediationPlaybook, Certificate, CipherSuite, CBOM
+    Remediation, Certificate, CipherSuite, CBOM, PQCReadiness, UserRole
 )
 from ..auth.auth import get_current_user, require_roles
 from ..tasks.scan_tasks import run_full_scan
 from ..celery_app import celery_app
 
-router = APIRouter(prefix="/scans", tags=["scans"])
+router = APIRouter(prefix="/api/scans", tags=["scans"])
 
 
 @router.post("")
@@ -25,29 +25,33 @@ def start_scan(
     body: dict,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles(["ADMIN", "SECURITY_ANALYST", "SOC_TEAM"]))
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.SECURITY_ANALYST, UserRole.SOC_TEAM))
 ):
-    target_domain = body.get("target_domain", "").strip()
-    if not target_domain:
-        raise HTTPException(status_code=400, detail="target_domain is required")
+    org_name = body.get("org_name", "").strip()
+    target_assets = body.get("target_assets", [])
+
+    if not org_name:
+        raise HTTPException(status_code=400, detail="org_name is required")
+    if not target_assets:
+        raise HTTPException(status_code=400, detail="target_assets is required")
 
     scan_id = str(uuid.uuid4())
     scan = ScanJob(
         scan_id=scan_id,
-        target_domain=target_domain,
-        org_name=body.get("org_name", target_domain),
+        org_name=org_name,
+        target_assets=target_assets,
+        authorized=body.get("authorized", False),
         status=ScanStatus.PENDING,
-        initiated_by=current_user.username,
-        created_at=datetime.datetime.utcnow(),
+        created_by=current_user.id,
+        started_at=datetime.datetime.utcnow(),
     )
     db.add(scan)
     db.commit()
 
-    # Dispatch to Celery
-    celery_app.send_task("tasks.scan_tasks.run_full_scan", args=[scan_id])
+    # Dispatch to Celery in the correct queue
+    celery_app.send_task("app.tasks.scan_tasks.run_full_scan", args=[scan_id], queue="scans")
 
     return {"scan_id": scan_id, "status": "PENDING", "message": "Scan queued successfully"}
-
 
 
 @router.get("")
@@ -55,22 +59,21 @@ def list_scans(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    scans = db.query(ScanJob).order_by(ScanJob.created_at.desc()).limit(50).all()
-    return [
-        {
+    scans = db.query(ScanJob).order_by(ScanJob.started_at.desc()).limit(50).all()
+    result = []
+    for s in scans:
+        asset_count = db.query(Asset).filter(Asset.scan_id == s.scan_id).count()
+        result.append({
             "scan_id":       s.scan_id,
-            "target_domain": s.target_domain,
             "org_name":      s.org_name,
-            "status":        s.status.value,
-            "total_assets":  s.total_assets,
-            "avg_hndl":      s.avg_hndl_score,
-            "pqc_ready_pct": s.pqc_ready_percentage,
-            "created_at":    s.created_at.isoformat() if s.created_at else None,
+            "status":        s.status.value if s.status else "PENDING",
+            "progress":      s.progress or 0,
+            "asset_count":   asset_count,
+            "target_assets": s.target_assets or [],
+            "created_at":    s.started_at.isoformat() if s.started_at else None,
             "completed_at":  s.completed_at.isoformat() if s.completed_at else None,
-            "initiated_by":  s.initiated_by,
-        }
-        for s in scans
-    ]
+        })
+    return result
 
 
 @router.get("/{scan_id}")
@@ -83,25 +86,36 @@ def get_scan(
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
 
+    asset_count = db.query(Asset).filter(Asset.scan_id == scan_id).count()
+    avg_hndl = db.query(func.avg(Asset.hndl_score)).filter(Asset.scan_id == scan_id).scalar() or 0.0
+    quantum_safe = db.query(Asset).filter(
+        Asset.scan_id == scan_id,
+        Asset.pqc_readiness == PQCReadiness.QUANTUM_SAFE
+    ).count()
+    pqc_pct = round((quantum_safe / asset_count * 100) if asset_count > 0 else 0, 1)
+    critical_findings = 0
+    for asset in scan.assets:
+        critical_findings += db.query(Finding).filter(
+            Finding.asset_id == asset.asset_id,
+            Finding.severity == "CRITICAL"
+        ).count()
+
     return {
         "scan_id":           scan.scan_id,
-        "target_domain":     scan.target_domain,
         "org_name":          scan.org_name,
-        "status":            scan.status.value,
-        "progress_stage":    scan.progress_stage,
-        "progress_pct":      scan.progress_pct,
-        "total_assets":      scan.total_assets,
-        "avg_hndl":          scan.avg_hndl_score,
-        "pqc_ready_pct":     scan.pqc_ready_percentage,
-        "critical_findings": scan.critical_findings_count,
-        "created_at":        scan.created_at.isoformat() if scan.created_at else None,
+        "status":            scan.status.value if scan.status else "PENDING",
+        "progress":          scan.progress or 0,
+        "target_assets":     scan.target_assets or [],
+        "asset_count":       asset_count,
+        "avg_hndl":          round(float(avg_hndl), 2),
+        "pqc_ready_pct":     pqc_pct,
+        "critical_findings": critical_findings,
+        "created_at":        scan.started_at.isoformat() if scan.started_at else None,
         "completed_at":      scan.completed_at.isoformat() if scan.completed_at else None,
-        "initiated_by":      scan.initiated_by,
-        "error_message":     scan.error_message,
     }
 
 
-# ── GET /scans/{scan_id}/findings — All findings with compliance + remediation 
+# ── GET /scans/{scan_id}/findings — All findings with compliance + remediation
 @router.get("/{scan_id}/findings")
 def get_scan_findings(
     scan_id: str,
@@ -119,11 +133,10 @@ def get_scan_findings(
     for asset in assets:
         query = db.query(Finding).filter(Finding.asset_id == asset.asset_id)
         if severity:
-            query = query.filter(Finding.severity == int(severity))
+            query = query.filter(Finding.severity == severity.upper())
         findings = query.all()
 
         for f in findings:
-            # ── Compliance tags ──────────────────────────────────────────
             compliance_tags = [
                 {
                     "framework":   t.framework,
@@ -135,10 +148,10 @@ def get_scan_findings(
 
             remediation_plan = [
                 {
-                    "title":           r.title,
                     "steps":           r.steps,
                     "priority":        r.priority,
                     "pqc_alternative": r.pqc_alternative,
+                    "status":          r.status,
                 }
                 for r in (f.remediation_plan or [])
             ]
@@ -159,11 +172,16 @@ def get_scan_findings(
                 "remediation_plan": remediation_plan,
             })
 
-    all_findings.sort(key=lambda x: (x["severity"] or 0, x["hndl_score"] or 0), reverse=True)
+    # Sort by severity ranking, then HNDL score
+    severity_order = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+    all_findings.sort(
+        key=lambda x: (severity_order.get(x["severity"], 0), x["hndl_score"] or 0),
+        reverse=True
+    )
     return all_findings
 
 
-# ── GET /scans/{scan_id}/assets —
+# ── GET /scans/{scan_id}/assets
 @router.get("/{scan_id}/assets")
 def get_scan_assets(
     scan_id: str,
@@ -180,33 +198,38 @@ def get_scan_assets(
         result.append({
             "asset_id":        a.asset_id,
             "domain":          a.domain,
-            "ip_address":      a.ip_address,
-            "asset_type":      a.asset_type.value if hasattr(a.asset_type, "value") else a.asset_type,
+            "resolved_ips":    a.resolved_ips or [],
             "hndl_score":      a.hndl_score,
-            "pqc_ready":       a.pqc_ready,
-            "tls_version":     a.tls_version,
+            "is_pqc":          a.is_pqc,
+            "pqc_readiness":   a.pqc_readiness.value if a.pqc_readiness else None,
             "protocol":        a.protocol.value if hasattr(a.protocol, "value") else a.protocol,
             "is_cdn":          a.is_cdn,
             "cdn_provider":    a.cdn_provider,
+            "is_waf":          a.is_waf,
+            "open_ports":      a.open_ports or [],
+            "service_category": a.service_category,
             "certificates": [
                 {
-                    "subject":       c.subject,
-                    "issuer":        c.issuer,
-                    "algorithm":     c.algorithm,
-                    "key_size":      c.key_size,
-                    "valid_from":    c.valid_from.isoformat() if c.valid_from else None,
-                    "valid_until":   c.valid_until.isoformat() if c.valid_until else None,
-                    "is_expired":    c.is_expired,
-                    "days_to_expiry": c.days_to_expiry,
+                    "cert_id":     c.cert_id,
+                    "subject":     c.subject,
+                    "issuer":      c.issuer,
+                    "algorithm":   c.algorithm,
+                    "key_size":    c.key_size,
+                    "hndl_score":  c.hndl_score,
+                    "expires_at":  c.expires_at.isoformat() if c.expires_at else None,
+                    "is_pqc":      c.is_pqc,
                 }
                 for c in certs
             ],
             "cipher_suites": [
                 {
-                    "name":         cs.name,
-                    "tls_version":  cs.tls_version,
-                    "key_exchange": cs.key_exchange,
-                    "is_quantum_safe": cs.is_quantum_safe,
+                    "suite_id":             cs.suite_id,
+                    "name":                 cs.name,
+                    "tls_version":          cs.tls_version,
+                    "key_exchange":         cs.key_exchange,
+                    "quantum_risk":         cs.quantum_risk,
+                    "is_quantum_vulnerable": cs.is_quantum_vulnerable,
+                    "strength":             cs.strength,
                 }
                 for cs in ciphers
             ],
@@ -215,12 +238,12 @@ def get_scan_assets(
     return result
 
 
-# ── GET /scans/{scan_id}/cbom — CycloneDX 1.4 CBOM 
+# ── GET /scans/{scan_id}/cbom — CycloneDX CBOM
 @router.get("/{scan_id}/cbom")
 def get_scan_cbom(
     scan_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles(["ADMIN", "SECURITY_ANALYST", "COMPLIANCE_OFFICER"]))
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.SECURITY_ANALYST, UserRole.COMPLIANCE_OFFICER))
 ):
     scan = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
     if not scan:
@@ -230,23 +253,17 @@ def get_scan_cbom(
     if not cbom:
         raise HTTPException(status_code=404, detail="CBOM not yet generated for this scan")
 
-    return {
-        "cbom_id":        cbom.cbom_id,
-        "scan_id":        cbom.scan_id,
-        "format":         cbom.format,
-        "spec_version":   cbom.spec_version,
-        "component_count": cbom.component_count,
-        "generated_at":   cbom.generated_at.isoformat() if cbom.generated_at else None,
-        "cbom_json":      cbom.cbom_json,
-    }
+    # Return the stored CycloneDX JSON directly — the frontend expects
+    # CycloneDX fields: bomFormat, specVersion, cryptoProperties, components, etc.
+    return cbom.content
 
 
-# ── DELETE /scans/{scan_id} — Admin only ─────────────────────────────────────
+# ── DELETE /scans/{scan_id} — Admin only
 @router.delete("/{scan_id}")
 def delete_scan(
     scan_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles(["ADMIN"]))
+    current_user=Depends(require_roles(UserRole.ADMIN))
 ):
     scan = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
     if not scan:
