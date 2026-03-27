@@ -74,6 +74,7 @@ body {
   font-weight: 700;
   background: var(--gradient-primary);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: 0.5px;
 }
@@ -259,6 +260,7 @@ body {
   font-weight: 800;
   background: var(--gradient-primary);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -406,6 +408,7 @@ tr:hover td { background: rgba(255,255,255,0.02); }
   font-weight: 800;
   background: var(--gradient-primary);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -413,3 +416,81 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 
 /* Tags cloud */
 .tag { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2); color: #93c5fd; font-size: 11px; padding: 2px 8px; border-radius: 12px; }
+
+/* ─── ALGORITHM / KEY-SIZE BADGES ───────────────────── */
+
+/** Quantum-vulnerable algorithm (RSA, ECDSA, DHE …) */
+.algo-vuln {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 700;
+  color: #ef4444;
+  background: rgba(239,68,68,0.12);
+  border: 1px solid rgba(239,68,68,0.3);
+  padding: 2px 8px; border-radius: 6px;
+  display: inline-block;
+}
+
+/** PQC-safe algorithm (CRYSTALS-*, FALCON, SPHINCS+) */
+.algo-safe {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 700;
+  color: #10b981;
+  background: rgba(16,185,129,0.12);
+  border: 1px solid rgba(16,185,129,0.3);
+  padding: 2px 8px; border-radius: 6px;
+  display: inline-block;
+}
+
+/** Unknown / not-yet-determined algorithm */
+.algo-unknown {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600;
+  color: #6b7280;
+  background: rgba(107,114,128,0.1);
+  border: 1px solid rgba(107,114,128,0.25);
+  padding: 2px 8px; border-radius: 6px;
+  display: inline-block;
+}
+
+/** Key size — weak (<2048 bits RSA) */
+.key-weak   { font-weight: 700; font-size: 12px; color: #ef4444; }
+/** Key size — medium (2048-3071) */
+.key-medium { font-weight: 700; font-size: 12px; color: #f97316; }
+/** Key size — strong (≥3072) */
+.key-strong { font-weight: 700; font-size: 12px; color: #10b981; }
+
+/* ─── SCAN METHOD CHIP ───────────────────────────────── */
+.scan-method-chip {
+  display: inline-block;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px; border-radius: 20px;
+  letter-spacing: 0.3px;
+}
+
+.scan-method-openssl { color: #10b981; background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3); }
+.scan-method-python  { color: #f59e0b; background: rgba(245,158,11,0.12);  border: 1px solid rgba(245,158,11,0.3);  }
+.scan-method-testssl { color: #3b82f6; background: rgba(59,130,246,0.12);  border: 1px solid rgba(59,130,246,0.3);  }
+
+/* ─── PORT CHIP ──────────────────────────────────────── */
+.port-chip {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 6px;
+  background: rgba(59,130,246,0.1);
+  color: #93c5fd;
+  border: 1px solid rgba(59,130,246,0.2);
+  display: inline-block;
+}
+
+/* ─── DETAIL INFO ROW ────────────────────────────────── */
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 12px;
+}
+.info-row:last-child { border-bottom: none; }
+.info-row .label { color: var(--text-muted); }
+.info-row .value { font-weight: 600; }

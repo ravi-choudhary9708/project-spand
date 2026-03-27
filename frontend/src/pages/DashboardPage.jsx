@@ -4,7 +4,10 @@
 // Analyst/SOC/Admin sees full technical dashboard.
 
 import { useState, useEffect } from "react";
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts";
+import {
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList,
+} from "recharts";
 import api from "../api/client";
 
 const ROLE_MANAGEMENT = "MANAGEMENT";
@@ -165,24 +168,83 @@ function TechnicalDashboard({ stats, role }) {
           )}
         </div>
 
-        {/* Bar — Algorithm breakdown */}
+        {/* Bar — Algorithm breakdown (real data from scanner, color-coded by quantum risk) */}
         <div style={styles.chartCard}>
           <h3 style={styles.cardTitle}>Algorithm Exposure</h3>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, display: "flex", gap: 12 }}>
+            <span style={{ color: "#ef4444" }}>■ Quantum Vulnerable</span>
+            <span style={{ color: "#10b981" }}>■ PQC Safe</span>
+            <span style={{ color: "#6b7280" }}>■ Unknown</span>
+          </div>
           {algoData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
+            <ResponsiveContainer width="100%" height={200}>
               <BarChart data={algoData} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                 <XAxis dataKey="algorithm" tick={{ fill: "#94a3b8", fontSize: 11 }} />
                 <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155" }} />
-                <Bar dataKey="count" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                <Tooltip
+                  contentStyle={{ background: "#1e293b", border: "1px solid #334155", fontSize: 12 }}
+                  formatter={(v, n, p) => [
+                    v,
+                    `${p.payload.algorithm} (${p.payload.quantum_vulnerable ? '⚠ Quantum Vulnerable' : '✓ Safe'})`,
+                  ]}
+                />
+                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                  {algoData.map((entry, i) => (
+                    <Cell
+                      key={i}
+                      fill={
+                        entry.quantum_vulnerable === false ? "#10b981"
+                        : entry.quantum_vulnerable === true  ? "#ef4444"
+                        : "#6b7280"
+                      }
+                    />
+                  ))}
+                  <LabelList dataKey="count" position="top" style={{ fill: "#94a3b8", fontSize: 10 }} />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <p style={styles.noData}>No data available.</p>
+            <p style={styles.noData}>No data available. Run a scan to see algorithm details.</p>
           )}
         </div>
       </div>
+
+      {/* Key Size Distribution row (new — surfaced from real scan data) */}
+      {stats.key_size_breakdown?.length > 0 && (
+        <div style={{ ...styles.chartCard, marginBottom: 24 }}>
+          <h3 style={styles.cardTitle}>Key Size Distribution</h3>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, display: "flex", gap: 12 }}>
+            <span style={{ color: "#ef4444" }}>■ Weak (&lt;2048-bit)</span>
+            <span style={{ color: "#f97316" }}>■ Medium (2048–3071)</span>
+            <span style={{ color: "#10b981" }}>■ Strong (≥3072)</span>
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={stats.key_size_breakdown} margin={{ top: 5, right: 10, bottom: 5, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+              <XAxis dataKey="key_size" tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={v => `${v}-bit`} />
+              <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} />
+              <Tooltip
+                contentStyle={{ background: "#1e293b", border: "1px solid #334155", fontSize: 12 }}
+                formatter={(v, n, p) => [v, `${p.payload.key_size}-bit`]}
+              />
+              <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                {stats.key_size_breakdown.map((entry, i) => (
+                  <Cell
+                    key={i}
+                    fill={
+                      entry.key_size < 2048 ? "#ef4444"
+                      : entry.key_size < 3072 ? "#f97316"
+                      : "#10b981"
+                    }
+                  />
+                ))}
+                <LabelList dataKey="count" position="top" style={{ fill: "#94a3b8", fontSize: 10 }} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Compliance row */}
       {stats.compliance && (
