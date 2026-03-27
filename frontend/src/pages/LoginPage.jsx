@@ -2,11 +2,13 @@ import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api/client'
 import toast from 'react-hot-toast'
+import { useAuth } from '../App'
 
 export default function LoginPage() {
   const [form, setForm] = useState({ username: '', password: '' })
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const { login } = useAuth()
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -14,8 +16,7 @@ export default function LoginPage() {
     try {
       const data = new URLSearchParams({ username: form.username, password: form.password })
       const res = await api.post('/auth/login', data, { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
-      localStorage.setItem('token', res.data.access_token)
-      localStorage.setItem('user', JSON.stringify(res.data.user))
+      login(res.data.user, res.data.access_token)
       toast.success(`Welcome, ${res.data.user.username}!`)
       navigate('/')
     } catch {
