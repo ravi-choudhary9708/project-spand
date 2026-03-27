@@ -86,6 +86,7 @@ def run_full_scan(self, scan_id: str):
                     is_cdn=scan_data.get("is_cdn", False),
                     open_ports=scan_data.get("open_ports", []),
                     service_category=_get_service_category(scan_data.get("protocol", "")),
+                    scan_method=scan_data.get("tls_data", {}).get("scan_method"),
                 )
 
                 db.add(asset)
@@ -93,53 +94,92 @@ def run_full_scan(self, scan_id: str):
 
                 tls_data = scan_data.get("tls_data", {})
 
-                main_algorithm = "RSA"
-                main_key_size = 2048
+                # Real values from scanner (OpenSSL CLI or Python ssl fallback)
+                # Defaults are used ONLY when the scanner truly cannot extract them.
+                main_algorithm = None
+                main_key_size = None
                 expires_at = None
 
-                # NEW: infer sensitivity
+                # infer sensitivity from domain keywords
                 sensitivity = _get_data_sensitivity(domain)
 
                 for cert_data in scan_data.get("certificates", []):
 
                     subject = cert_data.get("subject", {})
-                    issuer = cert_data.get("issuer", {})
+                    issuer  = cert_data.get("issuer", {})
 
-                    algorithm = cert_data.get("algorithm", "RSA")
-                    key_size = cert_data.get("key_size", 2048)
+                    # ── Real algorithm from OpenSSL (e.g. "RSA", "ECDSA", "Ed25519") ──
+                    algorithm = cert_data.get("algorithm")  # None if unavailable
 
+                    # ── Real key size from OpenSSL (e.g. 2048, 256, 384) ──
+                    key_size = cert_data.get("key_size")    # None if unavailable
+
+                    # ── Certificate expiry ──
                     not_after_str = cert_data.get("notAfter", "")
-
                     try:
                         expires_at = datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
-
                     except Exception:
-                        expires_at = None
+                        try:
+                            # OpenSSL sometimes outputs: "Mar 28 00:00:00 2026 GMT"
+                            expires_at = datetime.strptime(not_after_str.strip(), "%b %d %H:%M:%S %Y %Z")
+                        except Exception:
+                            expires_at = None
 
-                    main_algorithm = algorithm or "RSA"
-                    main_key_size = key_size or 2048
+                    # Keep first non-None values as the main asset values
+                    if main_algorithm is None and algorithm:
+                        main_algorithm = algorithm
+                    if main_key_size is None and key_size:
+                        main_key_size = key_size
+
+                    # ── Subject / Issuer display names ──
+                    subject_cn = (
+                        subject.get("commonName", domain)
+                        if isinstance(subject, dict)
+                        else str(subject) or domain
+                    )
+                    issuer_org = (
+                        issuer.get("organizationName")
+                        or issuer.get("commonName")
+                        or "Unknown"
+                        if isinstance(issuer, dict)
+                        else str(issuer) or "Unknown"
+                    )
 
                     cert_hndl = calculate_hndl_score(
-                        main_algorithm,
-                        main_key_size,
+                        algorithm or "UNKNOWN",
+                        key_size,
                         sensitivity,
-                        expires_at
+                        expires_at,
                     )
 
                     cert = Certificate(
                         cert_id=str(uuid.uuid4()),
                         asset_id=asset.asset_id,
                         domain=domain,
-                        subject=str(subject.get("commonName", domain)) if isinstance(subject, dict) else domain,
-                        issuer=str(issuer.get("organizationName", "Unknown")) if isinstance(issuer, dict) else "Unknown",
-                        algorithm=main_algorithm,
-                        key_size=main_key_size,
+                        subject=subject_cn,
+                        issuer=issuer_org,
+                        algorithm=algorithm or "UNKNOWN",
+                        key_size=key_size,
                         hndl_score=cert_hndl,
                         expires_at=expires_at,
-                        is_pqc=not is_quantum_vulnerable(main_algorithm),
+                        is_pqc=not is_quantum_vulnerable(algorithm or "UNKNOWN"),
                     )
 
                     db.add(cert)
+
+                # If scanner returned no algorithm at all, fall back to
+                # inferring from the negotiated cipher suite name.
+                if main_algorithm is None:
+                    for suite in scan_data.get("cipher_suites", []):
+                        kex = suite.get("key_exchange", "")
+                        if kex and kex != "UNKNOWN":
+                            main_algorithm = kex
+                            break
+
+                # Final safety defaults (only when nothing could be determined)
+                if main_algorithm is None:
+                    main_algorithm = "UNKNOWN"
+                    logger.warning(f"Could not determine algorithm for {domain}, using UNKNOWN")
 
                 for suite_data in scan_data.get("cipher_suites", []):
 
@@ -178,9 +218,9 @@ def run_full_scan(self, scan_id: str):
 
                 asset_hndl = calculate_hndl_score(
                     main_algorithm,
-                    main_key_size,
+                    main_key_size,   # may be None → HNDL engine handles it
                     sensitivity,
-                    expires_at
+                    expires_at,
                 )
 
                 asset.hndl_score = asset_hndl

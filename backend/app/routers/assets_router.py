@@ -47,6 +47,7 @@ async def get_asset(asset_id: str, db: Session = Depends(get_db), current_user=D
         "certificates": [_serialize_cert(c) for c in asset.certificates],
         "cipher_suites": [_serialize_suite(s) for s in asset.cipher_suites],
         "findings": [_serialize_finding(f) for f in asset.findings],
+        "tls_data": {"scan_method": asset.scan_method},
     }
 
 
@@ -58,8 +59,8 @@ async def get_asset_findings(asset_id: str, db: Session = Depends(get_db), curre
     return [_serialize_finding(f) for f in asset.findings]
 
 
-def _serialize_asset(a: Asset) -> dict:
-    return {
+def _serialize_asset(a: Asset, include_first_cert: bool = False) -> dict:
+    base = {
         "asset_id": a.asset_id,
         "scan_id": a.scan_id,
         "domain": a.domain,
@@ -74,7 +75,20 @@ def _serialize_asset(a: Asset) -> dict:
         "open_ports": a.open_ports or [],
         "service_category": a.service_category,
         "findings_count": len(a.findings),
+        # ── Real scan data fields ──
+        # algorithm & key_size are pulled from the first stored certificate
+        # so the asset list table can show them without a detail round-trip.
+        "algorithm": None,
+        "key_size":   None,
+        "issuer":     None,
     }
+    # Attach first-cert data to every list item for the table columns
+    if a.certificates:
+        first = a.certificates[0]
+        base["algorithm"] = first.algorithm
+        base["key_size"]   = first.key_size
+        base["issuer"]     = first.issuer
+    return base
 
 
 def _serialize_cert(c: Certificate) -> dict:
@@ -99,6 +113,8 @@ def _serialize_suite(s: CipherSuite) -> dict:
         "quantum_risk": s.quantum_risk,
         "is_quantum_vulnerable": s.is_quantum_vulnerable,
         "strength": s.strength,
+        # Port is stored in the suite name or as part of tls_version for multi-port scans
+        "port": getattr(s, 'port', None),
     }
 
 

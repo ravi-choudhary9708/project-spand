@@ -81,13 +81,38 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
     last_scan_job = db.query(ScanJob).order_by(ScanJob.started_at.desc()).first()
     last_scan = last_scan_job.started_at.isoformat() if last_scan_job and last_scan_job.started_at else None
 
-    # Algorithm breakdown (certificate algorithms)
+    # Algorithm breakdown — real data from scanner (certificate algorithms)
+    # Include quantum_vulnerable flag so frontend can color-code bars
+    QUANTUM_VULN_ALGOS = {"RSA", "ECDSA", "ECDH", "ECDHE", "DHE", "DH", "DSA", "ECC"}
+    PQC_SAFE_ALGOS    = {"CRYSTALS-KYBER", "CRYSTALS-DILITHIUM", "FALCON", "SPHINCS+",
+                         "ED25519", "ED448", "KYBER", "DILITHIUM"}
+
     algo_data = db.query(
         Certificate.algorithm, func.count(Certificate.cert_id)
     ).group_by(Certificate.algorithm).all()
-    algo_breakdown = [
-        {"algorithm": algo or "Unknown", "count": count}
-        for algo, count in algo_data
+    algo_breakdown = []
+    for algo, count in algo_data:
+        algo_upper = (algo or "").upper()
+        if any(a in algo_upper for a in QUANTUM_VULN_ALGOS):
+            quantum_vuln = True
+        elif any(a in algo_upper for a in PQC_SAFE_ALGOS):
+            quantum_vuln = False
+        else:
+            quantum_vuln = None   # unknown
+        algo_breakdown.append({
+            "algorithm": algo or "Unknown",
+            "count": count,
+            "quantum_vulnerable": quantum_vuln,
+        })
+
+    # Key size breakdown — real data from scanner
+    key_size_data = db.query(
+        Certificate.key_size, func.count(Certificate.cert_id)
+    ).filter(Certificate.key_size != None).group_by(Certificate.key_size).order_by(Certificate.key_size).all()
+    key_size_breakdown = [
+        {"key_size": ks, "count": cnt}
+        for ks, cnt in key_size_data
+        if ks is not None
     ]
 
     # HNDL distribution
@@ -131,6 +156,7 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
         "compliance": compliance,
         "hndl_distribution": hndl_distribution,
         "algo_breakdown": algo_breakdown,
+        "key_size_breakdown": key_size_breakdown,
         "protocol_distribution": [{"protocol": str(p), "count": c} for p, c in protocol_data],
         "recent_scans": recent_scans,
     }
