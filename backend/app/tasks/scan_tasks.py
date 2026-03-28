@@ -12,7 +12,7 @@ from app.models.models import (
     ScanStatus, ProtocolType, FindingType, PQCReadiness
 )
 from app.scanning.scanner import scan_asset, run_subfinder
-from app.engines.hndl_engine import calculate_hndl_score, is_quantum_vulnerable, get_pqc_readiness_label
+from app.engines.hndl_engine import calculate_hndl_score, is_quantum_vulnerable, get_pqc_readiness_label, is_pqc_ready
 from app.engines.compliance_engine import map_finding_to_compliance
 from app.engines.ai_remediation import get_remediation_playbook
 from app.engines.cbom_generator import generate_cbom
@@ -162,7 +162,7 @@ def run_full_scan(self, scan_id: str):
                         key_size=key_size,
                         hndl_score=cert_hndl,
                         expires_at=expires_at,
-                        is_pqc=not is_quantum_vulnerable(algorithm or "UNKNOWN"),
+                        is_pqc=is_pqc_ready(algorithm or "UNKNOWN"),
                     )
 
                     db.add(cert)
@@ -225,7 +225,7 @@ def run_full_scan(self, scan_id: str):
 
                 asset.hndl_score = asset_hndl
 
-                asset.is_pqc = not is_quantum_vulnerable(main_algorithm)
+                asset.is_pqc = is_pqc_ready(main_algorithm)
 
                 pqc_label = get_pqc_readiness_label(asset_hndl)
 
