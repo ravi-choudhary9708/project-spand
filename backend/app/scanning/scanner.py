@@ -17,7 +17,7 @@ import re
 import socket
 import ssl
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -412,6 +412,190 @@ def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optiona
 # ─────────────────────────────────────────
 # TLS
 # ─────────────────────────────────────────
+
+def scan_via_origin_bypass(
+    sni_domain: str,
+    origin_target: str,
+    port: int = 443,
+) -> Dict[str, Any]:
+    """
+    WAF/CDN bypass TLS scan.
+
+    Connect TCP to `origin_target` (an IP or internal host found from CT SANs)
+    but send `sni_domain` as TLS SNI. The server returns its REAL leaf
+    certificate — giving us the actual algorithm and key size.
+
+    Strategy:
+      1. openssl s_client -connect {origin_target}:{port} -servername {sni_domain}
+      2. Python ssl fallback (also supports SNI override via wrap_socket)
+
+    Returns same structure as run_tls_scan() so it drops in cleanly.
+    """
+    result: Dict[str, Any] = {
+        "domain":          sni_domain,
+        "origin_target":   origin_target,
+        "port":            port,
+        "tls_version":     None,
+        "cipher_suite":    None,
+        "certificates":    [],
+        "cipher_suites":   [],
+        "error":           None,
+        "scan_method":     "origin_bypass",
+    }
+
+    logger.info(f"[origin-bypass] {sni_domain} via {origin_target}:{port}")
+
+    # ── Method 1: OpenSSL CLI ─────────────────────────────────────────────────
+    if _openssl_available():
+        try:
+            # Get cipher + TLS version
+            cipher_cmd = [
+                "openssl", "s_client",
+                "-connect", f"{origin_target}:{port}",
+                "-servername", sni_domain,
+            ]
+            cipher_result = run_command(cipher_cmd, timeout=15, input_data="Q\n")
+            stdout = cipher_result["stdout"]
+
+            cipher_match = re.search(r"Cipher\s*:\s*(\S+)", stdout)
+            if cipher_match:
+                result["cipher_suite"] = cipher_match.group(1)
+
+            proto_match = re.search(r"Protocol\s*:\s*(\S+)", stdout)
+            if proto_match:
+                result["tls_version"] = proto_match.group(1).replace("TLSv", "TLS ")
+
+            # Get certificate
+            pem = _get_cert_pem_via_openssl(sni_domain, port)
+            # If that fails (WAF blocked direct), try via origin target
+            if not pem:
+                fetch_cmd = [
+                    "openssl", "s_client",
+                    "-connect", f"{origin_target}:{port}",
+                    "-servername", sni_domain,
+                    "-showcerts",
+                ]
+                fetch_result = run_command(fetch_cmd, timeout=15, input_data="Q\n")
+                match = re.search(
+                    r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
+                    fetch_result["stdout"],
+                    re.DOTALL,
+                )
+                if match:
+                    pem = match.group(1)
+
+            if pem:
+                cert_info = _parse_openssl_x509(pem)
+                logger.info(
+                    f"[origin-bypass] {sni_domain} via {origin_target} → "
+                    f"algo={cert_info['algorithm']} key_size={cert_info['key_size']}"
+                )
+                result["certificates"].append({
+                    "algorithm":      cert_info["algorithm"],
+                    "key_size":       cert_info["key_size"],
+                    "subject":        cert_info["subject"],
+                    "issuer":         cert_info["issuer"],
+                    "notAfter":       cert_info["notAfter"],
+                    "serialNumber":   cert_info["serialNumber"],
+                    "subjectAltName": cert_info["subjectAltName"],
+                })
+                if result["cipher_suite"]:
+                    result["cipher_suites"].append({
+                        "name":         result["cipher_suite"],
+                        "tls_version":  result["tls_version"] or "",
+                        "key_exchange": _extract_key_exchange(result["cipher_suite"]),
+                        "port":         port,
+                    })
+                return result
+
+        except Exception as e:
+            logger.debug(f"[origin-bypass] openssl failed for {sni_domain}/{origin_target}: {e}")
+
+    # ── Method 2: Python ssl with SNI override ────────────────────────────────
+    try:
+        import ssl as _ssl
+
+        context = _ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode    = _ssl.CERT_NONE   # origin may not match CN
+
+        with socket.create_connection((origin_target, port), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=sni_domain) as ssock:
+                result["tls_version"] = ssock.version()
+                cipher = ssock.cipher()
+                if cipher:
+                    result["cipher_suite"] = cipher[0]
+
+                cert = ssock.getpeercert()
+                if cert:
+                    subject = dict(x[0] for x in cert.get("subject", []))
+                    issuer  = dict(x[0] for x in cert.get("issuer", []))
+
+                    # Python ssl cannot extract algorithm/key_size from getpeercert()
+                    # But we at least get expiry + cipher-based inference
+                    algo, key_size, _ = _infer_from_cipher_and_issuer(
+                        cipher_name=result["cipher_suite"] or "",
+                        issuer_str=" ".join([
+                            issuer.get("organizationName", ""),
+                            issuer.get("commonName", ""),
+                        ]).strip(),
+                    )
+
+                    result["certificates"].append({
+                        "algorithm":      algo,
+                        "key_size":       key_size,
+                        "subject":        subject,
+                        "issuer":         issuer,
+                        "notAfter":       cert.get("notAfter", ""),
+                        "serialNumber":   cert.get("serialNumber", ""),
+                        "subjectAltName": [v for _, v in cert.get("subjectAltName", [])],
+                    })
+                    logger.info(
+                        f"[origin-bypass/pyssl] {sni_domain} via {origin_target} → "
+                        f"algo={algo} (cipher-inferred)"
+                    )
+
+                if result["cipher_suite"]:
+                    result["cipher_suites"].append({
+                        "name":         result["cipher_suite"],
+                        "tls_version":  result["tls_version"] or "",
+                        "key_exchange": _extract_key_exchange(result["cipher_suite"]),
+                        "port":         port,
+                    })
+
+    except Exception as e:
+        result["error"] = str(e)
+        logger.debug(f"[origin-bypass] python ssl failed for {sni_domain}/{origin_target}: {e}")
+
+    return result
+
+
+def _infer_from_cipher_and_issuer(
+    cipher_name: str,
+    issuer_str: str,
+) -> Tuple[str, int, str]:
+    """
+    Infer (algorithm, key_size, source) from cipher suite + issuer string.
+    Used when openssl is unavailable and Python ssl can't extract key algo.
+    """
+    cu = cipher_name.upper()
+    iu = issuer_str.upper()
+
+    if "ECDHE_ECDSA" in cu or "ECDH_ECDSA" in cu:
+        return "ECDSA", 256, "cipher_suite"
+    if "ECDHE_RSA" in cu or "ECDH_RSA" in cu:
+        return "RSA", 2048, "cipher_suite"
+    if cu.startswith("TLS_RSA_WITH") or cu.startswith("RSA_WITH"):
+        return "RSA", 2048, "cipher_suite"
+
+    if "ECC" in iu or "ECDSA" in iu:
+        return "ECDSA", 384 if "384" in iu else 256, "issuer_name"
+    if "RSA" in iu:
+        m = re.search(r"RSA[- ]?(\d{4})", iu)
+        return "RSA", int(m.group(1)) if m else 2048, "issuer_name"
+
+    return "RSA", 2048, "default"
+
 
 def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
     """

@@ -20,9 +20,13 @@ const pqcColor = (r) =>
 function ScanMethodBadge({ method }) {
   if (!method) return null
   const map = {
-    openssl_cli: { label: 'OpenSSL CLI', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
-    python_ssl:  { label: 'Python SSL',  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-    testssl:     { label: 'testssl.sh',  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
+    openssl_cli:   { label: 'OpenSSL CLI (real)', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    python_ssl:    { label: 'Python SSL (real)',  color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    tls_scan:      { label: 'TLS cipher (real)',  color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    origin_bypass: { label: 'Origin Bypass (real)', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    ct_logs_issuer_inferred: { label: 'CT logs (approx)', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
+    default:       { label: 'Default (no data)', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
+    testssl:       { label: 'testssl.sh',  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
   }
   const m = map[method] || { label: method, color: '#94a3b8', bg: 'rgba(148,163,184,0.1)' }
   return (
@@ -46,7 +50,7 @@ function InfoRow({ label, value, mono }) {
 }
 
 /* ── Certificate card ────────────────────────────────── */
-function CertCard({ c }) {
+function CertCard({ c, scanMethod }) {
   const algo    = c.algorithm || 'Unknown'
   const keySize = c.key_size  ? `${c.key_size}-bit` : '—'
   const issuer  = typeof c.issuer === 'object'
@@ -56,8 +60,12 @@ function CertCard({ c }) {
     ? (c.subject?.commonName || c.subject?.organizationName || '—')
     : (c.subject || '—')
 
-  const isUnknownAlgo = algo === 'UNKNOWN' || algo === 'Unknown'
-  const algoColor = isUnknownAlgo ? '#6b7280' : '#00d4ff'
+  const isDefault = scanMethod === 'default'
+  const isApprox  = scanMethod === 'ct_logs_issuer_inferred'
+  const suffix = isDefault ? ' (default)' : isApprox ? ' (approx)' : ''
+
+  const isUnknownAlgo = algo === 'UNKNOWN' || algo === 'Unknown' || isDefault
+  const algoColor = isUnknownAlgo ? '#6b7280' : isApprox ? '#f59e0b' : '#00d4ff'
 
   return (
     <div style={{
@@ -79,6 +87,7 @@ function CertCard({ c }) {
           border: `1px solid ${algoColor}35`,
         }}>
           {algo}
+          {suffix && <span style={{ fontSize: 9, opacity: 0.8, marginLeft: 4, fontWeight: 'normal' }}>{suffix}</span>}
         </span>
         {c.key_size && (
           <span style={{
@@ -131,7 +140,7 @@ function CipherRow({ s }) {
 /* ── Asset detail panel ──────────────────────────────── */
 function AssetDetail({ asset, onClose }) {
   const tlsData = asset.tls_data || {}
-  const scanMethod = tlsData.scan_method || null
+  const scanMethod = asset.scan_method || tlsData.scan_method || null
 
   return (
     <div className="card scroll-fade" style={{ maxHeight: '82vh', overflowY: 'auto' }}>
@@ -193,7 +202,7 @@ function AssetDetail({ asset, onClose }) {
           <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8, letterSpacing: 1 }}>
             CERTIFICATES ({asset.certificates.length})
           </div>
-          {asset.certificates.map((c, i) => <CertCard key={c.cert_id || i} c={c} />)}
+          {asset.certificates.map((c, i) => <CertCard key={c.cert_id || i} c={c} scanMethod={scanMethod} />)}
         </div>
       )}
 
@@ -280,8 +289,12 @@ export default function AssetsPage() {
                       const algo    = firstCert?.algorithm  || a.algorithm  || '—'
                       const keySize = firstCert?.key_size   || a.key_size
 
-                      const isUnknownAlgo = algo === 'UNKNOWN' || algo === '—'
-                      const algoColor = isUnknownAlgo ? '#6b7280' : '#00d4ff'
+                      const isDefault = a.scan_method === 'default'
+                      const isApprox  = a.scan_method === 'ct_logs_issuer_inferred'
+                      const suffix = isDefault ? ' (default)' : isApprox ? ' (approx)' : ''
+
+                      const isUnknownAlgo = algo === 'UNKNOWN' || algo === '—' || isDefault
+                      const algoColor = isUnknownAlgo ? '#6b7280' : isApprox ? '#f59e0b' : '#00d4ff'
 
                       return (
                         <tr key={a.asset_id} onClick={() => loadAssetDetail(a)} style={{ cursor: 'pointer' }}>
@@ -298,6 +311,7 @@ export default function AssetsPage() {
                               color: algoColor,
                             }}>
                               {algo}
+                              {suffix && <span style={{ fontSize: 9, opacity: 0.8, marginLeft: 4, fontWeight: 'normal' }}>{suffix}</span>}
                             </span>
                           </td>
 

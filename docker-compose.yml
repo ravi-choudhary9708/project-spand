@@ -45,6 +45,7 @@ services:
       ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 1440
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      CRT_TXT_PATH: /app/crt.txt
     ports:
       - "8000:8000"
     depends_on:
@@ -56,6 +57,7 @@ services:
       - qps_network
     volumes:
       - scan_results:/app/scan_results
+      - ./crt.txt:/app/crt.txt:ro
     cap_add:
       - NET_ADMIN
       - NET_RAW
@@ -72,6 +74,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY:-quantum-proof-super-secret-key-2026}
       ENVIRONMENT: ${ENVIRONMENT:-development}
+      CRT_TXT_PATH: /app/crt.txt
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,6 +84,7 @@ services:
       - qps_network
     volumes:
       - scan_results:/app/scan_results
+      - ./crt.txt:/app/crt.txt:ro
     cap_add:
       - NET_ADMIN
       - NET_RAW
