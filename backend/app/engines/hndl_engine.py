@@ -121,6 +121,12 @@ def is_quantum_vulnerable(algorithm: str) -> bool:
     score = get_algorithm_vulnerability_score(algorithm)
     return score >= 6.0
 
+def is_pqc_ready(algorithm: str) -> bool:
+    if not algorithm or algorithm.upper() == "UNKNOWN":
+        return False
+    score = get_algorithm_vulnerability_score(algorithm)
+    return score <= 3.0
+
 
 def get_pqc_readiness_label(hndl_score: float) -> str:
     if hndl_score <= 3.0:
