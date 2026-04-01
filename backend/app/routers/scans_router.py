@@ -49,7 +49,8 @@ def start_scan(
     db.commit()
 
     # Dispatch to Celery in the correct queue
-    celery_app.send_task("app.tasks.scan_tasks.run_full_scan", args=[scan_id], queue="scans")
+    full_scan = body.get("full_scan", True)
+    celery_app.send_task("app.tasks.scan_tasks.run_full_scan", args=[scan_id, full_scan], queue="scans")
 
     return {"scan_id": scan_id, "status": "PENDING", "message": "Scan queued successfully"}
 

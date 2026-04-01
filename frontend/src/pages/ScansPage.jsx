@@ -8,7 +8,7 @@ function ScanStatusBadge({ status }) {
 }
 
 function NewScanModal({ onClose, onCreated }) {
-  const [form, setForm] = useState({ org_name: '', targets: '', authorized: false })
+  const [form, setForm] = useState({ org_name: '', targets: '', authorized: false, full_scan: true })
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e) => {
@@ -17,7 +17,7 @@ function NewScanModal({ onClose, onCreated }) {
     setLoading(true)
     try {
       const targets = form.targets.split('\n').map(t => t.trim()).filter(Boolean)
-      const res = await api.post('/scans', { org_name: form.org_name, target_assets: targets, authorized: true })
+      const res = await api.post('/scans', { org_name: form.org_name, target_assets: targets, authorized: true, full_scan: form.full_scan })
       toast.success('Scan started!')
       onCreated(res.data)
       onClose()
@@ -43,7 +43,18 @@ function NewScanModal({ onClose, onCreated }) {
             <label className="form-label">Target Assets (one per line) *</label>
             <textarea className="form-textarea" rows={6} placeholder={"example.com\napi.example.com\n192.168.1.1"}
               value={form.targets} onChange={e => setForm({ ...form, targets: e.target.value })} required style={{ resize: 'vertical' }} />
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Domains, subdomains, or IP addresses. System will auto-discover additional assets.</p>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>{form.full_scan ? 'System will auto-discover subdomains, mail servers, and related assets.' : 'Only the exact URLs above will be scanned — no subdomain discovery.'}</p>
+          </div>
+          <div className="form-group">
+            <label className="form-checkbox">
+              <input type="checkbox" checked={form.full_scan} onChange={e => setForm({ ...form, full_scan: e.target.checked })} />
+              <span style={{ fontSize: 13 }}>🏢 Full Organizational Scan</span>
+            </label>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, marginLeft: 22 }}>
+              {form.full_scan
+                ? 'Discovers subdomains, scans all ports, and mines CT/SPF/DNS records for complete coverage.'
+                : 'Scans only the exact domains/IPs you entered — faster but less comprehensive.'}
+            </p>
           </div>
           <div className="form-group">
             <label className="form-checkbox">

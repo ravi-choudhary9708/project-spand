@@ -126,7 +126,7 @@ def _build_ct_cache(root_domain: str) -> dict:
 # ─────────────────────────────────────────────────────────────────
 
 @shared_task(bind=True, name="app.tasks.scan_tasks.run_full_scan", max_retries=2)
-def run_full_scan(self, scan_id: str):
+def run_full_scan(self, scan_id: str, full_scan: bool = True):
 
     db: Session = SessionLocal()
     scan_job = None
@@ -150,22 +150,26 @@ def run_full_scan(self, scan_id: str):
         ))
         logger.info(f"Clean targets: {clean_targets}")
 
-        # ── STEP 2: subfinder — discover subdomains ───────────────
-        self.update_state(state="PROGRESS", meta={"progress": 5, "step": "Discovering subdomains (subfinder)"})
-        expanded = []
-        for target in clean_targets:
-            # IP addresses: scan directly, no subfinder
-            if re.match(r"^\d+\.\d+\.\d+\.\d+$", target):
-                expanded.append(target)
-                continue
-            subs = run_subfinder(target)
-            for sub in subs:
-                cleaned = _clean_domain(sub)
-                if cleaned and "." in cleaned:
-                    expanded.append(cleaned)
-
-        all_domains = list(set(expanded))
-        logger.info(f"subfinder discovered {len(all_domains)} unique domains")
+        # ── STEP 2: subfinder — discover subdomains (only if full_scan) ───
+        if full_scan:
+            self.update_state(state="PROGRESS", meta={"progress": 5, "step": "Discovering subdomains (subfinder)"})
+            expanded = []
+            for target in clean_targets:
+                # IP addresses: scan directly, no subfinder
+                if re.match(r"^\d+\.\d+\.\d+\.\d+$", target):
+                    expanded.append(target)
+                    continue
+                subs = run_subfinder(target)
+                for sub in subs:
+                    cleaned = _clean_domain(sub)
+                    if cleaned and "." in cleaned:
+                        expanded.append(cleaned)
+            all_domains = list(set(expanded))
+            logger.info(f"subfinder discovered {len(all_domains)} unique domains")
+        else:
+            self.update_state(state="PROGRESS", meta={"progress": 5, "step": "Targeted scan — skipping subdomain discovery"})
+            all_domains = clean_targets
+            logger.info(f"Targeted scan (full_scan=False): {len(all_domains)} domains")
 
         # ── STEP 3: Build CT log cache ONCE per root domain ───────
         # crt.sh gives us algorithm + expiry for ALL subdomains —
