@@ -780,13 +780,20 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
     Attempt TLS scan in priority order:
       1. testssl.sh  (most comprehensive)
       2. openssl CLI  (real data: algorithm, key_size, issuer, cipher suite)
-      3. Python ssl module fallback
+      3. Python ssl module fallback (uses cryptography lib for real algo/key_size)
+
+    Falls back to the next method if the current one returns no certificates.
     """
     if is_tool_available("testssl.sh"):
-        return _run_testssl(domain, port)
+        result = _run_testssl(domain, port)
+        if result.get("certificates"):
+            return result
 
     if _openssl_available():
-        return _openssl_tls_scan(domain, port, starttls)
+        result = _openssl_tls_scan(domain, port, starttls)
+        if result.get("certificates"):
+            return result
+        logger.info(f"[tls] openssl returned no certs for {domain}:{port}, trying python ssl")
 
     return _python_tls_scan(domain, port)
 
@@ -839,22 +846,57 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
                 "subjectAltName": cert_info["subjectAltName"],
             })
         else:
-            logger.warning(f"[openssl] Could not retrieve PEM for {domain}:{port}")
-            result["error"] = "Could not retrieve certificate PEM"
+            logger.warning(f"[openssl] Could not retrieve PEM for {domain}:{port}, cascading to python ssl")
+            return _python_tls_scan(domain, port)
 
     except Exception as e:
-        logger.error(f"[openssl] TLS scan error for {domain}:{port}: {e}")
-        result["error"] = str(e)
+        logger.error(f"[openssl] TLS scan error for {domain}:{port}: {e}, cascading to python ssl")
+        return _python_tls_scan(domain, port)
 
     return result
+
+
+def _extract_algo_from_der(der_bytes: bytes) -> Tuple[Optional[str], Optional[int]]:
+    """
+    Parse a DER-encoded certificate using the `cryptography` library to
+    extract the REAL public key algorithm and key size.
+    Returns (algorithm, key_size) or (None, None) if parsing fails.
+    """
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives.asymmetric import (
+            rsa, ec, ed25519, ed448, dsa,
+        )
+
+        cert = x509.load_der_x509_certificate(der_bytes)
+        pub_key = cert.public_key()
+
+        if isinstance(pub_key, rsa.RSAPublicKey):
+            return "RSA", pub_key.key_size
+        if isinstance(pub_key, ec.EllipticCurvePublicKey):
+            return "ECDSA", pub_key.key_size
+        if isinstance(pub_key, ed25519.Ed25519PublicKey):
+            return "Ed25519", 256
+        if isinstance(pub_key, ed448.Ed448PublicKey):
+            return "Ed448", 448
+        if isinstance(pub_key, dsa.DSAPublicKey):
+            return "DSA", pub_key.key_size
+
+        return None, None
+    except ImportError:
+        logger.debug("[pyssl] cryptography library not available for DER parsing")
+        return None, None
+    except Exception as e:
+        logger.debug(f"[pyssl] DER cert parsing failed: {e}")
+        return None, None
 
 
 def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
     """
     Fallback TLS scan using Python's ssl module.
-    Extracts cipher suite name and TLS version from the negotiated connection.
-    Note: Python ssl does NOT expose algorithm or key_size from getpeercert(),
-    so those will be None and must be inferred later.
+    Uses getpeercert(binary_form=True) + `cryptography` library to extract
+    the REAL algorithm and key_size from the DER-encoded certificate.
+    Falls back to cipher-based inference if cryptography is unavailable.
     """
     result = {
         "domain": domain,
@@ -870,6 +912,9 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
 
     try:
         context = ssl.create_default_context()
+        # Allow connection even if cert verification fails (self-signed, etc.)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
 
         with socket.create_connection((domain, port), timeout=10) as sock:
 
@@ -879,26 +924,116 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
 
                 # cipher() returns (name, protocol, bits)
                 cipher = ssock.cipher()
+                cipher_name = ""
                 if cipher:
-                    result["cipher_suite"] = cipher[0]
+                    cipher_name = cipher[0]
+                    result["cipher_suite"] = cipher_name
 
-                cert = ssock.getpeercert()
+                # ── Get DER cert for real algo/key_size via cryptography lib ──
+                der_bytes = ssock.getpeercert(binary_form=True)
+                real_algo, real_key_size = None, None
+                if der_bytes:
+                    real_algo, real_key_size = _extract_algo_from_der(der_bytes)
+                    if real_algo:
+                        logger.info(
+                            f"[pyssl] {domain}:{port} → real algo={real_algo} "
+                            f"key_size={real_key_size} (from DER cert)"
+                        )
+                        result["scan_method"] = "python_ssl_real"
 
-                if cert:
-                    subject = dict(x[0] for x in cert.get("subject", []))
-                    issuer  = dict(x[0] for x in cert.get("issuer", []))
+                # ── Get human-readable cert fields ──
+                # Re-connect with verification for getpeercert() readable fields,
+                # or parse from DER
+                subject = {}
+                issuer = {}
+                not_after = ""
+                serial = ""
+                sans = []
 
-                    result["certificates"].append({
-                        "algorithm":      None,   # Python ssl cannot extract this
-                        "key_size":       None,   # Python ssl cannot extract this
-                        "subject":        subject,
-                        "issuer":         issuer,
-                        "notAfter":       cert.get("notAfter", ""),
-                        "serialNumber":   cert.get("serialNumber", ""),
-                        "subjectAltName": [v for _, v in cert.get("subjectAltName", [])],
-                    })
+                try:
+                    # Try to extract from DER via cryptography
+                    if der_bytes:
+                        from cryptography import x509
+                        cert_obj = x509.load_der_x509_certificate(der_bytes)
+                        # Subject
+                        for attr in cert_obj.subject:
+                            oid_name = attr.oid._name
+                            key_map = {
+                                "commonName": "commonName",
+                                "organizationName": "organizationName",
+                                "countryName": "countryName",
+                            }
+                            if oid_name in key_map:
+                                subject[key_map[oid_name]] = attr.value
+                        # Issuer
+                        for attr in cert_obj.issuer:
+                            oid_name = attr.oid._name
+                            key_map = {
+                                "commonName": "commonName",
+                                "organizationName": "organizationName",
+                                "countryName": "countryName",
+                            }
+                            if oid_name in key_map:
+                                issuer[key_map[oid_name]] = attr.value
+                        # Expiry
+                        not_after = cert_obj.not_valid_after_utc.strftime(
+                            "%b %d %H:%M:%S %Y"
+                        )
+                        # Serial
+                        serial = format(cert_obj.serial_number, "x")
+                        # SANs
+                        try:
+                            san_ext = cert_obj.extensions.get_extension_for_class(
+                                x509.SubjectAlternativeName
+                            )
+                            sans = san_ext.value.get_values_for_type(x509.DNSName)
+                        except x509.ExtensionNotFound:
+                            pass
+                except ImportError:
+                    # cryptography not available — try getpeercert() with verify
+                    try:
+                        ctx2 = ssl.create_default_context()
+                        with socket.create_connection((domain, port), timeout=10) as s2:
+                            with ctx2.wrap_socket(s2, server_hostname=domain) as ss2:
+                                cert = ss2.getpeercert()
+                                if cert:
+                                    subject = dict(x[0] for x in cert.get("subject", []))
+                                    issuer = dict(x[0] for x in cert.get("issuer", []))
+                                    not_after = cert.get("notAfter", "")
+                                    serial = cert.get("serialNumber", "")
+                                    sans = [v for _, v in cert.get("subjectAltName", [])]
+                    except Exception:
+                        pass
+                except Exception as parse_err:
+                    logger.debug(f"[pyssl] cert field parsing failed: {parse_err}")
+
+                # ── Fallback: infer algo from cipher + issuer if no real data ──
+                if not real_algo:
+                    issuer_str = " ".join([
+                        issuer.get("organizationName", ""),
+                        issuer.get("commonName", ""),
+                    ]).strip()
+                    real_algo, real_key_size, _ = _infer_from_cipher_and_issuer(
+                        cipher_name, issuer_str
+                    )
+                    result["scan_method"] = "python_ssl_inferred"
+                    logger.info(
+                        f"[pyssl] {domain}:{port} → inferred algo={real_algo} "
+                        f"key_size={real_key_size} (from cipher+issuer)"
+                    )
+
+                result["certificates"].append({
+                    "algorithm":      real_algo,
+                    "key_size":       real_key_size,
+                    "subject":        subject,
+                    "issuer":         issuer,
+                    "notAfter":       not_after,
+                    "serialNumber":   serial,
+                    "subjectAltName": sans,
+                })
 
     except Exception as e:
+        logger.error(f"[pyssl] TLS scan error for {domain}:{port}: {e}")
         result["error"] = str(e)
 
     return result
