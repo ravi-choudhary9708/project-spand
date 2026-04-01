@@ -30,7 +30,8 @@ from app.models.models import (
 )
 from app.scanning.scanner import scan_asset, run_subfinder, scan_via_origin_bypass
 from app.scanning.ct_log_scanner import (
-    get_domains_from_ct_logs, parse_ct_log_file, find_origin_targets_from_ct
+    get_domains_from_ct_logs, parse_ct_log_file, find_origin_targets_from_ct,
+    get_historical_ips_viewdns, get_ips_from_spf, _is_known_cdn_ip,
 )
 from app.engines.hndl_engine import (
     calculate_hndl_score, is_quantum_vulnerable,
@@ -252,18 +253,37 @@ def run_full_scan(self, scan_id: str):
                     bypass_done = False
                     try:
                         origin_targets = find_origin_targets_from_ct(domain)
+
+                        # Fix 7a: Add SPF-mined IPs (data: REAL)
+                        spf_ips = get_ips_from_spf(domain)
+                        for ip in spf_ips:
+                            origin_targets.append({
+                                "type": "ip", "value": ip,
+                                "cert_domain": domain, "source": "spf",
+                            })
+
+                        # Fix 7b: Add historical DNS IPs (data: APPROX)
+                        hist_ips = get_historical_ips_viewdns(_get_root_domain(domain))
+                        for ip in hist_ips:
+                            if not _is_known_cdn_ip(ip):
+                                origin_targets.append({
+                                    "type": "ip", "value": ip,
+                                    "cert_domain": domain, "source": "passive_dns",
+                                })
+
                         for target in origin_targets:
                             t_value = target.get("value", "")
                             if not t_value:
                                 continue
+                            t_source = target.get("source", "ct_san")
                             logger.info(
                                 f"{domain}: [PATH B1] trying origin bypass via "
-                                f"{target['type']}={t_value}"
+                                f"{target['type']}={t_value} (source={t_source})"
                             )
                             bypass_data = scan_via_origin_bypass(
                                 sni_domain=domain,
                                 origin_target=t_value,
-                                port=443,
+                                # Fix 5: omit port — multi-port probing via BYPASS_PORTS
                             )
                             bypass_certs = bypass_data.get("certificates", [])
                             if bypass_certs:
@@ -273,7 +293,7 @@ def run_full_scan(self, scan_id: str):
                                 if b_algo:
                                     main_algorithm   = b_algo
                                     main_key_size    = b_ks or 2048
-                                    algorithm_source = "origin_bypass"
+                                    algorithm_source = f"origin_bypass_{t_source}"
                                     # Parse expiry from bypass cert
                                     not_after_str = c.get("notAfter", "")
                                     if not_after_str and expires_at is None:
@@ -289,7 +309,8 @@ def run_full_scan(self, scan_id: str):
                                     bypass_done = True
                                     logger.info(
                                         f"{domain}: [PATH B1] ✓ origin bypass succeeded → "
-                                        f"{main_algorithm}-{main_key_size} via {t_value}"
+                                        f"{main_algorithm}-{main_key_size} via {t_value} "
+                                        f"(source={t_source}, port={bypass_data.get('port', '?')})"
                                     )
                                     break
                     except Exception as e:
@@ -433,12 +454,15 @@ def run_full_scan(self, scan_id: str):
 
                     # Human-readable description of how we obtained this algo
                     source_labels = {
-                        "openssl_cli":             "OpenSSL CLI — direct TLS certificate inspection (real)",
-                        "python_ssl":              "Python ssl module — TLS handshake (real)",
-                        "tls_scan":                "TLS scan — cipher-suite inference (real)",
-                        "origin_bypass":           "CT SAN origin-IP bypass — WAF bypassed, real leaf cert (real)",
-                        "ct_logs_issuer_inferred": "CT logs — issuer-name inference (approximate, not leaf cert)",
-                        "default":                 "Conservative RSA-2048 assumption (no data available)",
+                        "openssl_cli":                  "OpenSSL CLI — direct TLS certificate inspection (real)",
+                        "python_ssl":                   "Python ssl module — TLS handshake (real)",
+                        "tls_scan":                     "TLS scan — cipher-suite inference (real)",
+                        "origin_bypass":                "CT SAN origin-IP bypass — WAF bypassed, real leaf cert (real)",
+                        "origin_bypass_ct_san":         "CT SAN origin-IP bypass — WAF bypassed, real leaf cert (real)",
+                        "origin_bypass_spf":            "SPF record IP bypass — WAF bypassed via mail-server IP (real)",
+                        "origin_bypass_passive_dns":    "Passive DNS historical IP bypass — WAF bypassed (approx IP, real cert)",
+                        "ct_logs_issuer_inferred":      "CT logs — issuer-name inference (approximate, not leaf cert)",
+                        "default":                      "Conservative RSA-2048 assumption (no data available)",
                     }
                     source_desc = source_labels.get(algorithm_source, algorithm_source)
 

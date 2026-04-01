@@ -65,7 +65,7 @@ spand scans your organization's public-facing domains and tells you:
 ## 🏗️ Architecture
 
 ```
-Browser (React)
+Browser (React js)
     ↓
 Nginx (reverse proxy)
     ↓

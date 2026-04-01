@@ -37,6 +37,7 @@ Two purposes:
 import re
 import logging
 import socket
+import ipaddress
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -56,6 +57,25 @@ _ORIGIN_PATTERNS = [
 ]
 
 _IPv4_RE = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$")
+
+# ── Known CDN IP ranges (CIDR) for filtering out edge-node IPs ────────────────
+_CDN_CIDRS = [
+    # Cloudflare
+    "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "104.16.0.0/13", "104.24.0.0/14",
+    "108.162.192.0/18", "131.0.72.0/22",
+    "141.101.64.0/18", "162.158.0.0/15",
+    "172.64.0.0/13", "173.245.48.0/20",
+    "188.114.96.0/20", "190.93.240.0/20",
+    "197.234.240.0/22", "198.41.128.0/17",
+    # Akamai (selected ranges)
+    "23.32.0.0/11", "104.64.0.0/10",
+    # Fastly
+    "151.101.0.0/16",
+    # CloudFront (selected)
+    "54.230.0.0/16", "54.240.128.0/18",
+]
+_CDN_NETWORKS = [ipaddress.ip_network(c) for c in _CDN_CIDRS]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,9 +287,11 @@ def find_origin_targets_from_ct(domain: str) -> List[Dict[str, str]]:
     seen: set = set()
 
     try:
-        # Query for the specific domain (not wildcard root)
-        url = f"https://crt.sh/?q={domain}&output=json"
-        logger.info(f"CT origin-bypass query: {url}")
+        # ── Fix 1: Use wildcard query against root domain ──────────────
+        # This catches certs for *.pnb.bank.in, internal subdomains, etc.
+        root = _get_root_domain(domain)
+        url = f"https://crt.sh/?q=%.{root}&output=json"
+        logger.info(f"CT origin-bypass query (wildcard root): {url}")
 
         resp = requests.get(url, timeout=30, headers={
             "User-Agent": "QuantumShield-Scanner/1.0 (Security Research)"
@@ -446,3 +468,110 @@ def _parse_date_ymd(date_str: str) -> Optional[datetime]:
         return datetime.strptime(str(date_str)[:10], "%Y-%m-%d")
     except ValueError:
         return None
+
+
+def _get_root_domain(domain: str) -> str:
+    """
+    Derive the root domain for CT log wildcard queries.
+      netbanking.pnb.bank.in → pnb.bank.in   (4-part → last 3)
+      api.example.com        → example.com    (3-part → last 2)
+    """
+    parts = domain.split(".")
+    if len(parts) >= 4:
+        return ".".join(parts[-3:])
+    if len(parts) >= 3:
+        return ".".join(parts[-2:])
+    return domain
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5.  CDN IP FILTER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_known_cdn_ip(ip: str) -> bool:
+    """
+    Returns True if `ip` falls within a known CDN address range.
+    Used to filter out edge-node IPs from passive DNS / SPF results.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+        return any(addr in net for net in _CDN_NETWORKS)
+    except ValueError:
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6.  PASSIVE DNS — Historical IP Mining  (data: APPROX — IPs may be stale)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_historical_ips_viewdns(domain: str) -> List[str]:
+    """
+    Query ViewDNS.info for historical A-record IPs.
+    Returns IPs the domain pointed to before moving behind a CDN.
+
+    Data quality: APPROXIMATE — historical IPs may no longer be active.
+    """
+    try:
+        import requests
+    except ImportError:
+        logger.warning("requests not available — ViewDNS lookup skipped")
+        return []
+
+    try:
+        url = f"https://api.viewdns.info/iphistory/?domain={domain}&apikey=free&output=json"
+        resp = requests.get(url, timeout=15, headers={
+            "User-Agent": "QuantumShield-Scanner/1.0 (Security Research)"
+        })
+        data = resp.json()
+        ips: List[str] = []
+        for record in data.get("response", {}).get("records", []):
+            ip = record.get("ip", "")
+            if ip and not _is_known_cdn_ip(ip):
+                ips.append(ip)
+        logger.info(f"ViewDNS historical IPs for {domain}: {ips}")
+        return ips
+    except Exception as e:
+        logger.debug(f"ViewDNS lookup failed for {domain}: {e}")
+        return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7.  SPF RECORD MINING  (data: REAL — current DNS TXT records)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_ips_from_spf(domain: str, _depth: int = 0) -> List[str]:
+    """
+    Mine SPF TXT records for ip4: directives.
+    SPF often reveals origin/mail-server IPs sharing the same /24 as the web origin.
+
+    Data quality: REAL — these are live DNS records.
+    Recursively follows `include:` directives (max depth 3).
+    """
+    if _depth > 3:
+        return []  # prevent infinite recursion
+
+    try:
+        import dns.resolver
+    except ImportError:
+        logger.warning("dnspython not available — SPF lookup skipped")
+        return []
+
+    ips: List[str] = []
+    try:
+        answers = dns.resolver.resolve(domain, "TXT")
+        for rdata in answers:
+            txt = b"".join(rdata.strings).decode("utf-8", errors="ignore")
+            if "v=spf1" not in txt.lower():
+                continue
+            for part in txt.split():
+                if part.startswith("ip4:"):
+                    ip = part[4:].split("/")[0]  # strip CIDR mask
+                    if not _is_known_cdn_ip(ip):
+                        ips.append(ip)
+                elif part.startswith("include:") and _depth < 3:
+                    sub = part[8:]
+                    ips.extend(get_ips_from_spf(sub, _depth + 1))
+        logger.info(f"SPF ips for {domain}: {ips}")
+    except Exception as e:
+        logger.debug(f"SPF lookup failed for {domain}: {e}")
+    return ips

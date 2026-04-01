@@ -413,10 +413,119 @@ def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optiona
 # TLS
 # ─────────────────────────────────────────
 
+# Ports to try when probing origin IPs for WAF/CDN bypass
+BYPASS_PORTS = [443, 8443, 4443, 2053, 2083, 2087, 8080]
+
+# CDN fingerprint headers — if ANY of these appear, we're still hitting an edge
+_CDN_FINGERPRINT_HEADERS = {
+    "cf-ray", "x-amz-cf-id", "x-cache", "x-cdn",
+    "x-akamai-transformed", "x-fastly-request-id",
+}
+_CDN_SERVER_KEYWORDS = ("cloudflare", "akamai", "cloudfront", "fastly")
+
+
+def _confirm_bypass_succeeded(
+    response_headers: dict,
+    cert_serial: str = "",
+    ct_serial: str = "",
+) -> bool:
+    """
+    Returns True only if we're genuinely bypassing the CDN.
+    Two checks:
+      1. No CDN fingerprint headers in the response
+      2. Cert serial matches what CT logs recorded (same leaf cert)
+    """
+    if response_headers:
+        for h in response_headers:
+            if h.lower() in _CDN_FINGERPRINT_HEADERS:
+                logger.info(f"[bypass-check] CDN header detected: {h}")
+                return False
+        server = str(response_headers.get("server", "")).lower()
+        if any(kw in server for kw in _CDN_SERVER_KEYWORDS):
+            logger.info(f"[bypass-check] CDN server detected: {server}")
+            return False
+
+    # If CT serial is known, confirm we got the same cert
+    if ct_serial and cert_serial and ct_serial != cert_serial:
+        logger.warning(
+            f"[bypass-check] Cert serial mismatch: got {cert_serial}, CT has {ct_serial}"
+        )
+        return False
+
+    return True
+
+
+def _http_probe_cdn_headers(
+    origin_target: str,
+    port: int,
+    sni_domain: str,
+) -> Dict[str, str]:
+    """
+    Open a TLS connection to origin_target:port, send a minimal HTTP/1.1 GET,
+    and return the response headers as a dict.
+
+    This is the bulletproof CDN detection: if the origin is still proxied
+    through Cloudflare/Akamai/etc., the response will contain fingerprint
+    headers like cf-ray, x-cache, server: cloudflare.
+
+    Returns empty dict on failure (connection refused, timeout, etc.).
+    """
+    headers: Dict[str, str] = {}
+    try:
+        import ssl as _ssl
+
+        context = _ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = _ssl.CERT_NONE
+
+        with socket.create_connection((origin_target, port), timeout=8) as sock:
+            with context.wrap_socket(sock, server_hostname=sni_domain) as ssock:
+                # Send minimal HTTP/1.1 request
+                request = (
+                    f"GET / HTTP/1.1\r\n"
+                    f"Host: {sni_domain}\r\n"
+                    f"Connection: close\r\n"
+                    f"User-Agent: QuantumShield-Scanner/1.0\r\n"
+                    f"\r\n"
+                )
+                ssock.sendall(request.encode("utf-8"))
+
+                # Read response (up to 4KB — we only need the headers)
+                response = b""
+                try:
+                    while len(response) < 4096:
+                        chunk = ssock.recv(4096)
+                        if not chunk:
+                            break
+                        response += chunk
+                        # Stop once we have the full header block
+                        if b"\r\n\r\n" in response:
+                            break
+                except socket.timeout:
+                    pass
+
+                # Parse headers from HTTP response
+                text = response.decode("utf-8", errors="ignore")
+                header_block = text.split("\r\n\r\n", 1)[0]
+                for line in header_block.split("\r\n")[1:]:  # skip status line
+                    if ":" in line:
+                        key, _, value = line.partition(":")
+                        headers[key.strip().lower()] = value.strip()
+
+        logger.debug(
+            f"[http-probe] {origin_target}:{port} returned {len(headers)} headers"
+        )
+    except Exception as e:
+        logger.debug(f"[http-probe] {origin_target}:{port} failed: {e}")
+
+    return headers
+
 def scan_via_origin_bypass(
     sni_domain: str,
     origin_target: str,
-    port: int = 443,
+    port: int = None,
+    ports: List[int] = None,
+    ct_serial: str = "",
 ) -> Dict[str, Any]:
     """
     WAF/CDN bypass TLS scan.
@@ -425,12 +534,62 @@ def scan_via_origin_bypass(
     but send `sni_domain` as TLS SNI. The server returns its REAL leaf
     certificate — giving us the actual algorithm and key size.
 
-    Strategy:
+    Fix 5: Tries multiple ports (BYPASS_PORTS) and returns the first
+    confirmed bypass success.
+    Fix 4: Validates bypass via CDN header fingerprinting + cert serial check.
+
+    Strategy per port:
       1. openssl s_client -connect {origin_target}:{port} -servername {sni_domain}
       2. Python ssl fallback (also supports SNI override via wrap_socket)
 
     Returns same structure as run_tls_scan() so it drops in cleanly.
     """
+    # Determine which ports to try
+    if ports:
+        try_ports = ports
+    elif port:
+        try_ports = [port]
+    else:
+        try_ports = BYPASS_PORTS
+
+    for try_port in try_ports:
+        result = _try_bypass_on_port(sni_domain, origin_target, try_port, ct_serial)
+        if result.get("certificates") and result.get("bypass_confirmed", False):
+            logger.info(
+                f"[origin-bypass] ✓ Confirmed bypass on port {try_port} "
+                f"for {sni_domain} via {origin_target}"
+            )
+            return result
+        elif result.get("certificates"):
+            # Got a cert but bypass not confirmed (CDN headers present)
+            logger.info(
+                f"[origin-bypass] port {try_port} returned cert but bypass NOT confirmed "
+                f"(still hitting CDN edge) for {sni_domain}"
+            )
+            # Continue trying other ports
+
+    # All ports exhausted — return last result with error note
+    return {
+        "domain":          sni_domain,
+        "origin_target":   origin_target,
+        "port":            try_ports[-1] if try_ports else 443,
+        "tls_version":     None,
+        "cipher_suite":    None,
+        "certificates":    [],
+        "cipher_suites":   [],
+        "error":           f"All ports failed or bypass not confirmed: {try_ports}",
+        "scan_method":     "origin_bypass",
+        "bypass_confirmed": False,
+    }
+
+
+def _try_bypass_on_port(
+    sni_domain: str,
+    origin_target: str,
+    port: int,
+    ct_serial: str = "",
+) -> Dict[str, Any]:
+    """Try a single port for origin bypass. Returns result dict."""
     result: Dict[str, Any] = {
         "domain":          sni_domain,
         "origin_target":   origin_target,
@@ -487,9 +646,14 @@ def scan_via_origin_bypass(
             if pem:
                 cert_info = _parse_openssl_x509(pem)
                 logger.info(
-                    f"[origin-bypass] {sni_domain} via {origin_target} → "
+                    f"[origin-bypass] {sni_domain} via {origin_target}:{port} → "
                     f"algo={cert_info['algorithm']} key_size={cert_info['key_size']}"
                 )
+                cert_serial = cert_info.get("serialNumber", "")
+                # HTTP-level CDN header probe for bulletproof confirmation
+                http_headers = _http_probe_cdn_headers(origin_target, port, sni_domain)
+                bypass_ok = _confirm_bypass_succeeded(http_headers, cert_serial, ct_serial)
+                result["bypass_confirmed"] = bypass_ok
                 result["certificates"].append({
                     "algorithm":      cert_info["algorithm"],
                     "key_size":       cert_info["key_size"],
@@ -550,9 +714,14 @@ def scan_via_origin_bypass(
                         "serialNumber":   cert.get("serialNumber", ""),
                         "subjectAltName": [v for _, v in cert.get("subjectAltName", [])],
                     })
+                    cert_serial = cert.get("serialNumber", "")
+                    # HTTP-level CDN header probe for bulletproof confirmation
+                    http_headers = _http_probe_cdn_headers(origin_target, port, sni_domain)
+                    bypass_ok = _confirm_bypass_succeeded(http_headers, cert_serial, ct_serial)
+                    result["bypass_confirmed"] = bypass_ok
                     logger.info(
-                        f"[origin-bypass/pyssl] {sni_domain} via {origin_target} → "
-                        f"algo={algo} (cipher-inferred)"
+                        f"[origin-bypass/pyssl] {sni_domain} via {origin_target}:{port} → "
+                        f"algo={algo} (cipher-inferred) bypass_confirmed={bypass_ok}"
                     )
 
                 if result["cipher_suite"]:
@@ -581,13 +750,21 @@ def _infer_from_cipher_and_issuer(
     cu = cipher_name.upper()
     iu = issuer_str.upper()
 
-    if "ECDHE_ECDSA" in cu or "ECDH_ECDSA" in cu:
+    # ── Fix 6: TLS 1.3 suites don't encode key exchange or auth algo ──────
+    # TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, etc.
+    # Auth algo comes from the cert, not the cipher suite name.
+    # Fall through to issuer-based inference instead of returning wrong default.
+    if cu.startswith("TLS_AES_") or cu.startswith("TLS_CHACHA20_"):
+        pass  # skip cipher-based inference, use issuer below
+    elif "ECDHE_ECDSA" in cu or "ECDH_ECDSA" in cu:
         return "ECDSA", 256, "cipher_suite"
-    if "ECDHE_RSA" in cu or "ECDH_RSA" in cu:
+    elif "ECDHE_RSA" in cu or "ECDH_RSA" in cu:
+        # Key exchange is ECDHE but the *cert* is RSA-signed
         return "RSA", 2048, "cipher_suite"
-    if cu.startswith("TLS_RSA_WITH") or cu.startswith("RSA_WITH"):
+    elif cu.startswith("TLS_RSA_WITH") or cu.startswith("RSA_WITH"):
         return "RSA", 2048, "cipher_suite"
 
+    # Issuer-based inference (fallback for TLS 1.3 and unknown ciphers)
     if "ECC" in iu or "ECDSA" in iu:
         return "ECDSA", 384 if "384" in iu else 256, "issuer_name"
     if "RSA" in iu:
