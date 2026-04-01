@@ -18,6 +18,7 @@ EXACT FLOW:
 import uuid
 import re
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import urlparse
 from celery import shared_task
@@ -184,23 +185,63 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 ct_cache.update(_build_ct_cache(root))
         logger.info(f"CT cache total: {len(ct_cache)} entries across {len(seen_roots)} root domain(s)")
 
-        # ── STEP 4: Scan each domain ──────────────────────────────
+        # ── STEP 4: Scan domains (concurrently, up to 5 at a time) ──
         total = len(all_domains)
         processed_assets = []
 
-        for i, domain in enumerate(all_domains):
+        # --- Network-scan phase runs in parallel (I/O bound) ------
+        # Each thread does: DNS + port-scan + TLS scan + bypass probing
+        # DB writes stay on the main thread (SQLAlchemy Session not thread-safe).
+        MAX_WORKERS = min(5, total) or 1
 
-            progress = int(10 + (i / max(total, 1)) * 78)
+        def _scan_domain_network(domain: str) -> dict:
+            """Run all network I/O for a single domain. Returns raw result dict."""
+            try:
+                scan_data = scan_asset(domain)
+                return {"domain": domain, "scan_data": scan_data, "error": None}
+            except Exception as e:
+                return {"domain": domain, "scan_data": None, "error": str(e)}
+
+        # Submit all domains to thread pool
+        self.update_state(state="PROGRESS", meta={
+            "progress": 10,
+            "step": f"Scanning {total} domains (up to {MAX_WORKERS} in parallel)"
+        })
+
+        network_results: list = []
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            future_map = {
+                pool.submit(_scan_domain_network, d): d
+                for d in all_domains
+            }
+            for i, future in enumerate(as_completed(future_map)):
+                net_result = future.result()
+                network_results.append(net_result)
+                progress = int(10 + ((i + 1) / max(total, 1)) * 50)
+                self.update_state(state="PROGRESS", meta={
+                    "progress": progress,
+                    "step": f"Scanned {net_result['domain']} ({i+1}/{total})"
+                })
+                scan_job.progress = progress
+                db.commit()
+
+        # --- Process results + DB writes (main thread) ------
+        for i, net_result in enumerate(network_results):
+            domain = net_result["domain"]
+            progress = int(60 + (i / max(total, 1)) * 28)
             self.update_state(state="PROGRESS", meta={
                 "progress": progress,
-                "step":     f"Scanning {domain} ({i+1}/{total})"
+                "step": f"Processing {domain} ({i+1}/{total})"
             })
             scan_job.progress = progress
             db.commit()
 
+            if net_result["error"] or not net_result["scan_data"]:
+                logger.error(f"Error scanning {domain}: {net_result.get('error', 'no data')}")
+                continue
+
             try:
-                # 4a: Network scan (nmap + TLS via openssl / python ssl)
-                scan_data    = scan_asset(domain)
+                scan_data    = net_result["scan_data"]
                 protocol     = scan_data.get("protocol", "UNKNOWN")
                 tls_data     = scan_data.get("tls_data", {})
                 open_ports   = scan_data.get("open_ports", [])
@@ -208,21 +249,15 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 is_cdn       = scan_data.get("is_cdn", False)
 
                 # 4b: Three-path algorithm decision ──────────────────
-                #
-                # PATH A: TLS handshake succeeded → openssl gave us the real algo
-                # PATH B: TLS blocked             → use CT log cache (passive recon)
-                # PATH C: No data at all          → conservative RSA-2048 default
-                #
                 main_algorithm   = None
                 main_key_size    = None
                 expires_at       = None
                 algorithm_source = "default"
 
                 # PATH A — check TLS scan result
-                tls_algo     = tls_data.get("algorithm")       # set by openssl_tls_scan
+                tls_algo     = tls_data.get("algorithm")
                 tls_key_size = tls_data.get("key_size")
 
-                # Also scan certificates list for algo/key_size
                 for cert_data in scan_data.get("certificates", []):
                     c_algo = cert_data.get("algorithm")
                     c_ks   = cert_data.get("key_size")
@@ -231,7 +266,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                         algorithm_source = tls_data.get("algorithm_source", "tls_scan")
                     if c_ks and main_key_size is None:
                         main_key_size = c_ks
-                    # Parse expiry from TLS cert
                     not_after_str = cert_data.get("notAfter", "")
                     if not_after_str and expires_at is None:
                         for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
@@ -251,14 +285,11 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
 
                 else:
                     # ── PATH B1: CT SANs → origin IP bypass → REAL leaf cert algo ──────
-                    # crt.sh may list an origin IP or internal host in the cert SANs.
-                    # Connecting to that IP with SNI=domain bypasses the WAF/CDN
-                    # and returns the ACTUAL leaf certificate.
                     bypass_done = False
                     try:
-                        origin_targets = find_origin_targets_from_ct(domain)
+                        # Pass ct_cache to avoid redundant crt.sh API call
+                        origin_targets = find_origin_targets_from_ct(domain, ct_cache=ct_cache)
 
-                        # Fix 7a: Add SPF-mined IPs (data: REAL)
                         spf_ips = get_ips_from_spf(domain)
                         for ip in spf_ips:
                             origin_targets.append({
@@ -266,7 +297,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                                 "cert_domain": domain, "source": "spf",
                             })
 
-                        # Fix 7b: Add historical DNS IPs (data: APPROX)
                         hist_ips = get_historical_ips_viewdns(_get_root_domain(domain))
                         for ip in hist_ips:
                             if not _is_known_cdn_ip(ip):
@@ -287,7 +317,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                             bypass_data = scan_via_origin_bypass(
                                 sni_domain=domain,
                                 origin_target=t_value,
-                                # Fix 5: omit port — multi-port probing via BYPASS_PORTS
                             )
                             bypass_certs = bypass_data.get("certificates", [])
                             if bypass_certs:
@@ -298,7 +327,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                                     main_algorithm   = b_algo
                                     main_key_size    = b_ks or 2048
                                     algorithm_source = f"origin_bypass_{t_source}"
-                                    # Parse expiry from bypass cert
                                     not_after_str = c.get("notAfter", "")
                                     if not_after_str and expires_at is None:
                                         for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
@@ -307,7 +335,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                                                 break
                                             except Exception:
                                                 continue
-                                    # Also pull into scan_data so cert records are saved
                                     scan_data["certificates"] = bypass_certs
                                     scan_data["cipher_suites"] = bypass_data.get("cipher_suites", [])
                                     bypass_done = True
@@ -321,9 +348,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                         logger.debug(f"{domain}: PATH B1 error: {e}")
 
                     if not bypass_done:
-                        # ── PATH B2: CT cache → expiry stored, algo is issuer-inferred ──
-                        # NOTE: This is an APPROXIMATION. The algo comes from the CA's
-                        # name, not the leaf cert. Use only when bypass also failed.
                         ct_entry = ct_cache.get(domain.lower())
                         if ct_entry:
                             main_algorithm   = ct_entry.get("algorithm", "RSA")
@@ -335,7 +359,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                                 f"(approx) expires={expires_at} issuer={ct_entry.get('issuer', 'Unknown')}"
                             )
                         else:
-                            # ── PATH C: nothing → conservative default ──────────────────
                             main_algorithm   = "RSA"
                             main_key_size    = 2048
                             algorithm_source = "default"
@@ -364,7 +387,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     hndl_score=asset_hndl,
                     is_pqc=is_pqc_ready(final_algo),
                     pqc_readiness=_map_pqc_readiness(pqc_label),
-                    scan_method=algorithm_source,  # track which path was used
+                    scan_method=algorithm_source,
                 )
                 db.add(asset)
                 db.flush()
@@ -395,7 +418,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                             is_pqc     = is_pqc_ready(final_algo),
                         ))
                 elif ct_entry_for_cert:
-                    # PATH B: synthesise a certificate record from CT log data
                     db.add(Certificate(
                         cert_id    = str(uuid.uuid4()),
                         asset_id   = asset.asset_id,
@@ -409,7 +431,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                         is_pqc     = is_pqc_ready(final_algo),
                     ))
                 else:
-                    # PATH C: minimal record — mark as default
                     db.add(Certificate(
                         cert_id    = str(uuid.uuid4()),
                         asset_id   = asset.asset_id,
@@ -456,7 +477,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 # 4f: Quantum-vulnerability finding ────────────────
                 if is_quantum_vulnerable(final_algo):
 
-                    # Human-readable description of how we obtained this algo
                     source_labels = {
                         "openssl_cli":                  "OpenSSL CLI — direct TLS certificate inspection (real)",
                         "python_ssl":                   "Python ssl module — TLS handshake (real)",
@@ -470,7 +490,6 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     }
                     source_desc = source_labels.get(algorithm_source, algorithm_source)
 
-                    # Label approximate / default results clearly in the UI
                     algo_display = f"{final_algo}-{final_key_size}"
                     if algorithm_source == "default":
                         algo_display += " (default — no data)"

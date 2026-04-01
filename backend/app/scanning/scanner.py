@@ -16,11 +16,15 @@ import os
 import re
 import socket
 import ssl
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
+
+# ── Tool availability cache (avoids repeated subprocess calls) ────────────────
+_tool_cache: Dict[str, bool] = {}
 
 
 # Ports that carry TLS (STARTTLS variants included via -starttls flag)
@@ -63,9 +67,12 @@ def run_command(cmd: List[str], timeout: int = 60, input_data: str = None) -> Di
 
 
 def is_tool_available(tool: str) -> bool:
-    """Check if a CLI tool is available in PATH."""
-    result = run_command(["which", tool] if os.name != "nt" else ["where", tool], timeout=5)
-    return result["returncode"] == 0
+    """Check if a CLI tool is available in PATH. Results are cached."""
+    if tool in _tool_cache:
+        return _tool_cache[tool]
+    result = run_command(["which", tool] if os.name != "nt" else ["where", tool], timeout=3)
+    _tool_cache[tool] = result["returncode"] == 0
+    return _tool_cache[tool]
 
 
 # ─────────────────────────────────────────
@@ -78,7 +85,7 @@ def run_subfinder(domain: str) -> List[str]:
         logger.warning("subfinder not found, using DNS fallback")
         return _subfinder_fallback(domain)
 
-    result = run_command(["subfinder", "-d", domain, "-silent", "-timeout", "30"], timeout=60)
+    result = run_command(["subfinder", "-d", domain, "-silent", "-timeout", "20"], timeout=30)
 
     if result["returncode"] == 0 and result["stdout"]:
         subdomains = [s.strip() for s in result["stdout"].split("\n") if s.strip()]
@@ -127,9 +134,11 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
 
     ports = "443,8443,25,587,465,143,993,110,995,21,990,22,1194,1723,500"
 
+    # -sS (SYN scan) is 5-10× faster than -sV (service version detection).
+    # We do our OWN TLS/cert extraction via openssl, so nmap scripts are redundant.
     result = run_command(
-        ["nmap", "-sV", "-p", ports, "--open", "-T4", "--script", "ssl-cert,ssl-enum-ciphers", target],
-        timeout=120
+        ["nmap", "-sS", "-p", ports, "--open", "-T5", "--max-retries", "1", target],
+        timeout=30
     )
 
     return _parse_nmap_output(result["stdout"], target)
@@ -147,26 +156,27 @@ def _nmap_fallback(target: str) -> Dict[str, Any]:
         1194: "VPN", 1723: "VPN", 500: "VPN",
     }
 
-    open_ports = []
-
-    for port, service in ports.items():
+    def _probe_port(port_service):
+        port, service = port_service
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-
+            sock.settimeout(1)
             result = sock.connect_ex((target, port))
-
             sock.close()
-
             if result == 0:
-                open_ports.append({
-                    "port": port,
-                    "service": service,
-                    "state": "open"
-                })
-
+                return {"port": port, "service": service, "state": "open"}
         except Exception:
             pass
+        return None
+
+    # Probe all ports concurrently — 15 ports × 1s timeout = ~1s total (not 30s)
+    open_ports = []
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        futures = [pool.submit(_probe_port, ps) for ps in ports.items()]
+        for f in as_completed(futures):
+            r = f.result()
+            if r:
+                open_ports.append(r)
 
     return {"target": target, "open_ports": open_ports, "raw": ""}
 
@@ -213,14 +223,14 @@ def _get_cert_pem_via_openssl(domain: str, port: int, starttls: Optional[str] = 
     if starttls:
         cmd += ["-starttls", starttls]
 
-    result = run_command(cmd, timeout=15, input_data="Q\n")
+    result = run_command(cmd, timeout=8, input_data="Q\n")
 
     if result["returncode"] not in (0, 1) or not result["stdout"]:
         # Try without SNI (IP targets, unknown protocol)
         cmd2 = ["openssl", "s_client", "-connect", f"{domain}:{port}", "-showcerts"]
         if starttls:
             cmd2 += ["-starttls", starttls]
-        result = run_command(cmd2, timeout=15, input_data="Q\n")
+        result = run_command(cmd2, timeout=8, input_data="Q\n")
 
     stdout = result["stdout"]
     # Extract first certificate PEM block
@@ -390,7 +400,7 @@ def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optiona
     if starttls:
         cmd += ["-starttls", starttls]
 
-    result = run_command(cmd, timeout=15, input_data="Q\n")
+    result = run_command(cmd, timeout=8, input_data="Q\n")
     stdout = result["stdout"]
 
     cipher_name = None
@@ -414,7 +424,8 @@ def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optiona
 # ─────────────────────────────────────────
 
 # Ports to try when probing origin IPs for WAF/CDN bypass
-BYPASS_PORTS = [443, 8443, 4443, 2053, 2083, 2087, 8080]
+# Reduced to the 3 most common to save time (was 7 ports × ~15s each = 105s)
+BYPASS_PORTS = [443, 8443, 8080]
 
 # CDN fingerprint headers — if ANY of these appear, we're still hitting an edge
 _CDN_FINGERPRINT_HEADERS = {
@@ -478,7 +489,7 @@ def _http_probe_cdn_headers(
         context.check_hostname = False
         context.verify_mode = _ssl.CERT_NONE
 
-        with socket.create_connection((origin_target, port), timeout=8) as sock:
+        with socket.create_connection((origin_target, port), timeout=5) as sock:
             with context.wrap_socket(sock, server_hostname=sni_domain) as ssock:
                 # Send minimal HTTP/1.1 request
                 request = (
@@ -613,7 +624,7 @@ def _try_bypass_on_port(
                 "-connect", f"{origin_target}:{port}",
                 "-servername", sni_domain,
             ]
-            cipher_result = run_command(cipher_cmd, timeout=15, input_data="Q\n")
+            cipher_result = run_command(cipher_cmd, timeout=8, input_data="Q\n")
             stdout = cipher_result["stdout"]
 
             cipher_match = re.search(r"Cipher\s*:\s*(\S+)", stdout)
@@ -683,7 +694,7 @@ def _try_bypass_on_port(
         context.check_hostname = False
         context.verify_mode    = _ssl.CERT_NONE   # origin may not match CN
 
-        with socket.create_connection((origin_target, port), timeout=10) as sock:
+        with socket.create_connection((origin_target, port), timeout=5) as sock:
             with context.wrap_socket(sock, server_hostname=sni_domain) as ssock:
                 result["tls_version"] = ssock.version()
                 cipher = ssock.cipher()
@@ -870,7 +881,7 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
     try:
         context = ssl.create_default_context()
 
-        with socket.create_connection((domain, port), timeout=10) as sock:
+        with socket.create_connection((domain, port), timeout=5) as sock:
 
             with context.wrap_socket(sock, server_hostname=domain) as ssock:
 
@@ -977,61 +988,57 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         result["protocol"] = "UNKNOWN"
 
     # ───────────────────────────────────────────────
-    # TLS SCAN – run on ALL TLS-capable open ports
-    # Including UNKNOWN protocol: try every open port
+    # TLS SCAN – scan PRIMARY TLS port only (fast mode)
+    # We only need ONE cert to determine algorithm/key.
+    # Most deployments use the same cert across all ports.
     # ───────────────────────────────────────────────
     primary_tls_data = None
 
-    # Determine which open ports to attempt TLS on
-    tls_scan_targets = []
+    # Pick the single best TLS port to scan (priority order)
+    _TLS_PRIORITY = [443, 8443, 993, 995, 465, 587, 990, 143, 110, 25, 21]
+    primary_port = None
+    primary_starttls = None
 
-    for port_num in sorted(port_numbers):
-        if port_num in TLS_PORTS:
-            tls_scan_targets.append((port_num, TLS_PORTS[port_num].get("starttls")))
+    for prio_port in _TLS_PRIORITY:
+        if prio_port in port_numbers and prio_port != 22:
+            primary_port = prio_port
+            primary_starttls = TLS_PORTS.get(prio_port, {}).get("starttls")
+            break
 
-    # For UNKNOWN protocol — also try any open port not in TLS_PORTS
-    if result["protocol"] == "UNKNOWN":
+    # Fallback: if no priority port found, try the first non-SSH open port
+    if primary_port is None:
         for port_num in sorted(port_numbers):
-            if port_num not in TLS_PORTS:
-                tls_scan_targets.append((port_num, None))
+            if port_num != 22:
+                primary_port = port_num
+                primary_starttls = TLS_PORTS.get(port_num, {}).get("starttls")
+                break
 
-    for scan_port, starttls in tls_scan_targets:
-
-        # SSH does not use TLS — skip cert extraction but note the port
-        if scan_port == 22:
-            logger.info(f"[scan] Skipping TLS cert extraction for SSH port 22 on {domain}")
-            continue
-
-        logger.info(f"[scan] TLS scanning {domain}:{scan_port} (starttls={starttls})")
+    if primary_port is not None:
+        logger.info(f"[scan] TLS scanning {domain}:{primary_port} (starttls={primary_starttls})")
 
         try:
-            tls_data = run_tls_scan(domain, scan_port, starttls)
-        except Exception as e:
-            logger.warning(f"[scan] TLS scan failed on {domain}:{scan_port}: {e}")
-            continue
+            tls_data = run_tls_scan(domain, primary_port, primary_starttls)
 
-        # Use the first successful TLS result as primary (highest-priority port)
-        if primary_tls_data is None and (tls_data.get("certificates") or tls_data.get("cipher_suite")):
-            primary_tls_data = tls_data
-            result["tls_data"] = tls_data
+            if tls_data.get("certificates") or tls_data.get("cipher_suite"):
+                primary_tls_data = tls_data
+                result["tls_data"] = tls_data
 
-        # Collect certificates (deduplicate by serialNumber)
-        seen_serials = {c.get("serialNumber") for c in result["certificates"]}
-        for cert in tls_data.get("certificates", []):
-            serial = cert.get("serialNumber", "")
-            if serial not in seen_serials:
+            # Collect certificates
+            for cert in tls_data.get("certificates", []):
                 result["certificates"].append(cert)
-                seen_serials.add(serial)
 
-        # Collect cipher suites
-        if tls_data.get("cipher_suite"):
-            cipher_entry = {
-                "name":         tls_data["cipher_suite"],
-                "tls_version":  tls_data.get("tls_version", ""),
-                "key_exchange": _extract_key_exchange(tls_data["cipher_suite"]),
-                "port":         scan_port,
-            }
-            result["cipher_suites"].append(cipher_entry)
+            # Collect cipher suites
+            if tls_data.get("cipher_suite"):
+                cipher_entry = {
+                    "name":         tls_data["cipher_suite"],
+                    "tls_version":  tls_data.get("tls_version", ""),
+                    "key_exchange": _extract_key_exchange(tls_data["cipher_suite"]),
+                    "port":         primary_port,
+                }
+                result["cipher_suites"].append(cipher_entry)
+
+        except Exception as e:
+            logger.warning(f"[scan] TLS scan failed on {domain}:{primary_port}: {e}")
 
     return result
 

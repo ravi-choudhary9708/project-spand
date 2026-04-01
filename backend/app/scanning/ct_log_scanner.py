@@ -261,13 +261,16 @@ def parse_ct_log_file(filepath: str) -> List[Dict[str, Any]]:
 # 3.  ORIGIN TARGET FINDER  ← THE KEY IMPROVEMENT
 # ─────────────────────────────────────────────────────────────────────────────
 
-def find_origin_targets_from_ct(domain: str) -> List[Dict[str, str]]:
+def find_origin_targets_from_ct(domain: str, ct_cache: dict = None) -> List[Dict[str, str]]:
     """
     Mine crt.sh SANs to find origin IPs / internal hostnames for WAF bypass.
 
     For each certificate that covers `domain`, inspect ALL SANs for:
       • Direct IPv4 addresses (IP SANs) — connect directly, SNI = domain
       • Internal/origin-looking hostnames — may resolve without CDN in the way
+
+    If `ct_cache` is provided (from the scan pipeline), uses cached entries
+    to avoid a redundant crt.sh API call.
 
     Returns list of:
       {
@@ -277,18 +280,45 @@ def find_origin_targets_from_ct(domain: str) -> List[Dict[str, str]]:
         "resolvable":  True | False,           ← whether DNS resolved
       }
     """
+    targets: List[Dict[str, str]] = []
+    seen: set = set()
+
+    # ── Fast path: extract origin hints from pre-built CT cache ───────
+    if ct_cache:
+        logger.info(f"CT origin-bypass: using pre-built cache ({len(ct_cache)} entries)")
+        for cached_domain in ct_cache:
+            cd = cached_domain.strip().lower()
+            if not cd:
+                continue
+            # Check all cached domains for IP SANs or origin-looking hostnames
+            if _IPv4_RE.match(cd):
+                if cd not in seen:
+                    seen.add(cd)
+                    targets.append({
+                        "type": "ip", "value": cd,
+                        "cert_domain": domain, "resolvable": "True",
+                    })
+            elif cd != domain.lower() and not cd.startswith("*."):
+                if _looks_like_origin_host(cd) and cd not in seen:
+                    seen.add(cd)
+                    resolvable = _can_resolve(cd)
+                    targets.append({
+                        "type": "host", "value": cd,
+                        "cert_domain": domain, "resolvable": str(resolvable),
+                    })
+        if targets:
+            logger.info(f"CT origin-bypass (cache): {len(targets)} bypass targets for {domain}")
+            return targets
+        # If cache had no origin hints, fall through to API
+
+    # ── Slow path: live crt.sh API query ──────────────────────────────
     try:
         import requests
     except ImportError:
         logger.warning("requests not available — origin bypass skipped")
         return []
 
-    targets: List[Dict[str, str]] = []
-    seen: set = set()
-
     try:
-        # ── Fix 1: Use wildcard query against root domain ──────────────
-        # This catches certs for *.pnb.bank.in, internal subdomains, etc.
         root = _get_root_domain(domain)
         url = f"https://crt.sh/?q=%.{root}&output=json"
         logger.info(f"CT origin-bypass query (wildcard root): {url}")
@@ -308,7 +338,6 @@ def find_origin_targets_from_ct(domain: str) -> List[Dict[str, str]]:
             name_value  = entry.get("name_value", "")
             common_name = entry.get("common_name", "")
 
-            # Collect all SANs from this cert
             all_names: List[str] = []
             all_names.append(common_name.strip())
             for n in name_value.split("\n"):
@@ -321,25 +350,22 @@ def find_origin_targets_from_ct(domain: str) -> List[Dict[str, str]]:
                 if not san or san in seen:
                     continue
 
-                # ── Case 1: IP SAN ─────────────────────────────────────────────
                 if _IPv4_RE.match(san):
                     seen.add(san)
-                    resolvable = True   # it's an IP, always "resolvable"
                     logger.info(f"CT origin-bypass: found IP SAN {san} for {domain}")
                     targets.append({
                         "type":        "ip",
                         "value":       san,
                         "cert_domain": domain,
-                        "resolvable":  str(resolvable),
+                        "resolvable":  "True",
                     })
                     continue
 
-                # ── Case 2: Internal / origin-looking hostname ─────────────────
                 san_lower = san.lower()
                 if san_lower == domain.lower():
-                    continue    # that's the domain itself, skip
+                    continue
                 if san_lower.startswith("*."):
-                    continue    # wildcard, skip
+                    continue
 
                 if _looks_like_origin_host(san_lower):
                     seen.add(san_lower)
