@@ -11,6 +11,7 @@ Key improvements:
   - Cipher suite extracted via Python ssl interface (real negotiated cipher)
 """
 import subprocess
+import concurrent.futures
 import json
 import os
 import re
@@ -127,9 +128,11 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
 
     ports = "443,8443,25,587,465,143,993,110,995,21,990,22,1194,1723,500"
 
+    # Fast SYN scan — service version detection and SSL scripts are NOT needed
+    # because TLS/cert data is gathered separately via openssl/python ssl.
     result = run_command(
-        ["nmap", "-sV", "-p", ports, "--open", "-T4", "--script", "ssl-cert,ssl-enum-ciphers", target],
-        timeout=120
+        ["nmap", "-sS", "-p", ports, "--open", "-T4", "--max-retries", "1", target],
+        timeout=30
     )
 
     return _parse_nmap_output(result["stdout"], target)
@@ -147,26 +150,24 @@ def _nmap_fallback(target: str) -> Dict[str, Any]:
         1194: "VPN", 1723: "VPN", 500: "VPN",
     }
 
-    open_ports = []
-
-    for port, service in ports.items():
+    def _check_port(port_service):
+        port, service = port_service
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2)
-
+            sock.settimeout(1.5)
             result = sock.connect_ex((target, port))
-
             sock.close()
-
             if result == 0:
-                open_ports.append({
-                    "port": port,
-                    "service": service,
-                    "state": "open"
-                })
-
+                return {"port": port, "service": service, "state": "open"}
         except Exception:
             pass
+        return None
+
+    # Check all ports concurrently — ~1.5s total instead of ~30s sequential
+    open_ports = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        results = executor.map(_check_port, ports.items())
+        open_ports = [r for r in results if r is not None]
 
     return {"target": target, "open_ports": open_ports, "raw": ""}
 
