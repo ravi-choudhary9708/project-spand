@@ -1,9 +1,10 @@
 """
 HNDL (Harvest Now Decrypt Later) Risk Score Engine
-Formula from SRS FR-09:
+Updated Formula:
   HNDL Score (0–10) = (Algorithm Vulnerability Score × 0.40)
                     + (Key Size Risk Score × 0.20)
-                    + (Data Sensitivity Weight × 0.30)
+                    + (Data Sensitivity Weight × 0.20)
+                    + (TLS Version Risk × 0.10)
                     + (Certificate Expiry Risk × 0.10)
 """
 from datetime import datetime
@@ -53,6 +54,20 @@ KEY_SIZE_RISK_MAP = {
     521: 1.5,
 }
 
+# TLS version risk scores (0-10)
+TLS_VERSION_RISK_MAP = {
+    "SSLv2": 10.0,
+    "SSLv3": 10.0,
+    "TLS 1.0": 9.0,
+    "TLSv1": 9.0,
+    "TLS 1.1": 8.0,
+    "TLSv1.1": 8.0,
+    "TLS 1.2": 4.0,
+    "TLSv1.2": 4.0,
+    "TLS 1.3": 1.0,
+    "TLSv1.3": 1.0,
+}
+
 
 def get_algorithm_vulnerability_score(algorithm: str) -> float:
     if not algorithm:
@@ -73,6 +88,13 @@ def get_key_size_risk(key_size: Optional[int], algorithm: str = "") -> float:
         if key_size <= size:
             return KEY_SIZE_RISK_MAP[size]
     return 1.0  # Very large key = low risk
+
+
+def get_tls_version_risk(tls_version: Optional[str]) -> float:
+    """Return risk score (0–10) for the negotiated TLS version."""
+    if not tls_version:
+        return 5.0  # Unknown = medium risk
+    return TLS_VERSION_RISK_MAP.get(tls_version, 5.0)
 
 
 def get_certificate_expiry_risk(expires_at: Optional[datetime]) -> float:
@@ -99,19 +121,23 @@ def calculate_hndl_score(
     key_size: Optional[int] = None,
     data_sensitivity: float = 5.0,  # 0-10, org-provided
     expires_at: Optional[datetime] = None,
+    tls_version: Optional[str] = None,
 ) -> float:
     """
-    Calculate HNDL risk score using the SRS formula:
-    Score = (AlgVuln × 0.40) + (KeySizeRisk × 0.20) + (DataSensitivity × 0.30) + (CertExpiry × 0.10)
+    Calculate HNDL risk score using the updated formula:
+    Score = (AlgVuln × 0.40) + (KeySizeRisk × 0.20) + (DataSensitivity × 0.20)
+          + (TLSVersionRisk × 0.10) + (CertExpiry × 0.10)
     """
     alg_score = get_algorithm_vulnerability_score(algorithm)
     key_score = get_key_size_risk(key_size, algorithm)
     expiry_score = get_certificate_expiry_risk(expires_at)
+    tls_score = get_tls_version_risk(tls_version)
 
     hndl = (
         (alg_score * 0.40) +
         (key_score * 0.20) +
-        (data_sensitivity * 0.30) +
+        (data_sensitivity * 0.20) +
+        (tls_score * 0.10) +
         (expiry_score * 0.10)
     )
     return round(min(max(hndl, 0.0), 10.0), 2)

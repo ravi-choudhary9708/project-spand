@@ -11,7 +11,7 @@ EXACT FLOW:
      PATH B1 — nmap blocked → CT SANs → origin IP/host → TLS+SNI bypass → real algo ✓✓
      PATH B2 — no origin IP → CT expiry stored, algorithm approximate (issuer inference)
      PATH C  — no data anywhere → RSA-2048 conservative default
-  5. HNDL = algo×0.40 + keysize×0.20 + sensitivity×0.30 + expiry×0.10
+  5. HNDL = algo×0.40 + keysize×0.20 + sensitivity×0.20 + tls_version×0.10 + expiry×0.10
   6. Finding + Remediation + ComplianceTag saved to DB
   7. CBOM generated in CycloneDX 1.4 format
 """
@@ -346,8 +346,11 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 final_key_size = main_key_size  or 2048
                 sensitivity    = _get_data_sensitivity(domain)
 
+                # Extract TLS version for HNDL scoring
+                tls_version_str = tls_data.get("tls_version") or None
+
                 asset_hndl = calculate_hndl_score(
-                    final_algo, final_key_size, sensitivity, expires_at
+                    final_algo, final_key_size, sensitivity, expires_at, tls_version_str
                 )
                 pqc_label  = get_pqc_readiness_label(asset_hndl)
 
