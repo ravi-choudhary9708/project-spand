@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y \
     iputils-ping \
     ca-certificates \
     unzip \
+    bsdextrautils \
+    procps \
     && rm -rf /var/lib/apt/lists/*
 
 # Install testssl.sh
