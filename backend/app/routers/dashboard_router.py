@@ -126,6 +126,15 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
     # Protocol distribution
     protocol_data = db.query(Asset.protocol, func.count(Asset.asset_id)).group_by(Asset.protocol).all()
 
+    # Server software distribution
+    server_data = db.query(Asset.server_software, func.count(Asset.asset_id)).filter(Asset.server_software != None).group_by(Asset.server_software).all()
+    
+    # CDN provider distribution
+    cdn_data = db.query(Asset.cdn_provider, func.count(Asset.asset_id)).filter(Asset.cdn_provider != None).group_by(Asset.cdn_provider).all()
+
+    # Service category distribution (refined)
+    service_data = db.query(Asset.service_category, func.count(Asset.asset_id)).group_by(Asset.service_category).all()
+
     return {
         # ── Flat fields for frontend KPI cards ──
         "total_scans": total_scans,
@@ -158,5 +167,8 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
         "algo_breakdown": algo_breakdown,
         "key_size_breakdown": key_size_breakdown,
         "protocol_distribution": [{"protocol": str(p), "count": c} for p, c in protocol_data],
+        "server_distribution": [{"server": s, "count": c} for s, c in server_data],
+        "cdn_distribution": [{"provider": p, "count": c} for p, c in cdn_data],
+        "service_distribution": [{"category": s, "count": c} for s, c in service_data],
         "recent_scans": recent_scans,
     }

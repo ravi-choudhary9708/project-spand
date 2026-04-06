@@ -74,6 +74,7 @@ def _serialize_asset(a: Asset, include_first_cert: bool = False) -> dict:
         "pqc_readiness": a.pqc_readiness.value if a.pqc_readiness else None,
         "open_ports": a.open_ports or [],
         "service_category": a.service_category,
+        "server_software": a.server_software,
         "findings_count": len(a.findings),
         # ── Real scan data fields ──
         # algorithm & key_size are pulled from the first stored certificate

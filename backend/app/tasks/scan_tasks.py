@@ -404,8 +404,10 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     resolved_ips=resolved_ips,
                     protocol=_map_protocol(protocol),
                     is_cdn=is_cdn,
+                    cdn_provider=scan_data.get("cdn_provider"),
+                    server_software=scan_data.get("server_software"),
                     open_ports=open_ports,
-                    service_category=_get_service_category(protocol),
+                    service_category=_get_service_category(protocol, domain, scan_data.get("server_software")),
                     hndl_score=asset_hndl,
                     hndl_breakdown=hndl_breakdown,
                     is_pqc=is_pqc_ready(final_algo),
@@ -742,7 +744,7 @@ def _get_data_sensitivity(domain: str) -> float:
     if any(x in d for x in ["swift", "cbdc", "rtgs", "neft"]):                return 9.5
     if any(x in d for x in ["vpn", "remote", "secure", "login", "auth", "iam"]): return 9.0
     if any(x in d for x in ["creditcard", "credit", "loan", "debit"]):        return 8.5
-    if any(x in d for x in ["api", "apim", "gateway", "bbps", "upi"]):        return 7.5
+    if any(x in d for x in ["api", "apim", "gateway", "bbps", "upi", "graphql", "rest"]): return 7.5
     if any(x in d for x in ["mail", "smtp", "imap"]):                         return 6.0
     if any(x in d for x in ["cdn", "static", "assets", "img", "images"]):     return 2.0
     if any(x in d for x in ["www", "web"]):                                   return 5.0
@@ -762,17 +764,39 @@ def _map_protocol(p: str) -> ProtocolType:
     }.get(p.upper(), ProtocolType.UNKNOWN)
 
 
-def _get_service_category(p: str) -> str:
-    return {
-        "HTTPS": "web",
-        "HTTP":  "web",
-        "SMTP":  "mail",
-        "IMAP":  "mail",
-        "POP3":  "mail",
+def _get_service_category(p: str, domain: str = "", server: str = None) -> str:
+    """
+    Categorize the service based on protocol, domain name, and server software.
+    Identifies Web Servers, API Gateways, Load Balancers, etc.
+    """
+    p_upper = p.upper()
+    d_lower = domain.lower()
+    s_lower = (server or "").lower()
+
+    # 1. API Gateways
+    if any(x in d_lower for x in ["api", "apim", "gateway", "graphql"]):
+        return "api_gateway"
+    if any(x in s_lower for x in ["kong", "tyk", "apigee", "aws-api-gateway"]):
+        return "api_gateway"
+
+    # 2. Load Balancers / CDNs
+    if any(x in s_lower for x in ["cloudflare", "akamai", "cloudfront", "f5", "citrix"]):
+        return "load_balancer"
+
+    # 3. Web Servers
+    if p_upper in ["HTTPS", "HTTP"]:
+        return "web_server"
+
+    # 4. Others
+    mapping = {
+        "SMTP":  "mail_server",
+        "IMAP":  "mail_server",
+        "POP3":  "mail_server",
         "FTPS":  "file_transfer",
         "SSH":   "remote_access",
-        "VPN":   "vpn",
-    }.get(p.upper(), "other")
+        "VPN":   "vpn_gateway",
+    }
+    return mapping.get(p_upper, "other_service")
 
 
 def _map_pqc_readiness(label: str) -> PQCReadiness:

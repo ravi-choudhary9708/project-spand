@@ -1108,6 +1108,8 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         "certificates": [],
         "cipher_suites": [],
         "findings": [],
+        "server_software": None,
+        "cdn_provider": None,
     }
 
     # DNS
@@ -1120,7 +1122,9 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
     target_ip = ips[0]
 
     # CDN
-    result["is_cdn"] = _detect_cdn(domain, target_ip)
+    is_cdn, cdn_provider = _detect_cdn(domain, target_ip)
+    result["is_cdn"] = is_cdn
+    result["cdn_provider"] = cdn_provider
 
     # PORT SCAN
     nmap_data = run_nmap_scan(target_ip if not result["is_cdn"] else domain)
@@ -1205,6 +1209,19 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
             }
             result["cipher_suites"].append(cipher_entry)
 
+    # ───────────────────────────────────────────────
+    # SERVER SOFTWARE IDENTIFICATION
+    # ───────────────────────────────────────────────
+    # Try to get 'Server' header from anyone we reached
+    headers = _http_probe_cdn_headers(target_ip, 443, domain)
+    if not headers:
+        headers = _http_probe_cdn_headers(target_ip, 80, domain)
+    
+    if headers:
+        result["server_software"] = headers.get("server")
+        if not result["server_software"] and headers.get("x-powered-by"):
+            result["server_software"] = f"Powered by {headers.get('x-powered-by')}"
+
     return result
 
 
@@ -1212,26 +1229,45 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
 # HELPERS
 # ─────────────────────────────────────────
 
-def _detect_cdn(domain: str, ip: str) -> bool:
+def _detect_cdn(domain: str, ip: str) -> Tuple[bool, Optional[str]]:
     # 1. Check HTTP response headers (most reliable)
     headers = _http_probe_cdn_headers(ip, 443, domain)
     if not headers:
         headers = _http_probe_cdn_headers(ip, 80, domain)
         
     if headers:
-        for h in headers:
+        for h, val in headers.items():
             if h.lower() in _CDN_FINGERPRINT_HEADERS:
-                return True
+                # Try to map header to a friendly name
+                provider = _map_header_to_cdn(h, val)
+                return True, provider
+        
         server = str(headers.get("server", "")).lower()
-        if any(kw in server for kw in _CDN_SERVER_KEYWORDS):
-            return True
+        for kw in _CDN_SERVER_KEYWORDS:
+            if kw in server:
+                return True, kw.capitalize()
 
     # 2. Fallback to reverse DNS check
     try:
         hostname = socket.gethostbyaddr(ip)[0].lower()
-        return any(k in hostname for k in _CDN_SERVER_KEYWORDS)
+        for kw in _CDN_SERVER_KEYWORDS:
+            if kw in hostname:
+                return True, kw.capitalize()
     except Exception:
-        return False
+        pass
+
+    return False, None
+
+
+def _map_header_to_cdn(header: str, value: str) -> str:
+    h = header.lower()
+    if h == "cf-ray": return "Cloudflare"
+    if "amz-cf" in h: return "CloudFront"
+    if "akamai" in h: return "Akamai"
+    if "fastly" in h: return "Fastly"
+    if "incap" in h or "visid_incap" in h: return "Imperva"
+    if "zscaler" in h: return "Zscaler"
+    return "Generic CDN/WAF"
 
 
 def _extract_key_exchange(cipher_name: str) -> str:

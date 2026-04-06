@@ -165,17 +165,10 @@ function AssetDetail({ asset, onClose }) {
 
       {/* KPI grid */}
       <div className="grid-2" style={{ gap: 10, marginBottom: 16 }}>
-        {[
-          ['HNDL Score', asset.hndl_score?.toFixed(2)],
-          ['Protocol',   asset.protocol],
-          ['PQC Status', asset.pqc_readiness],
-          ['Category',   asset.service_category],
-        ].map(([k, v]) => (
-          <div key={k} style={{ background: 'rgba(255,255,255,0.03)', padding: '8px 10px', borderRadius: 8 }}>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>{k}</div>
-            <div style={{ fontWeight: 700, fontSize: 13, color: k === 'PQC Status' ? pqcColor(v) : undefined }}>{v || '—'}</div>
-          </div>
-        ))}
+        <DetailKpi label="Avg HNDL" value={asset.hndl_score?.toFixed(2)} color={hndlColor(asset.hndl_score)} />
+        <DetailKpi label="Server" value={asset.server_software || "Unknown"} color="#3b82f6" />
+        <DetailKpi label="CDN Provider" value={asset.cdn_provider || "None / Direct"} color="#8b5cf6" />
+        <DetailKpi label="Category" value={asset.service_category?.replace('_', ' ').toUpperCase()} color="#f59e0b" />
       </div>
 
       {/* Open ports */}

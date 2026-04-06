@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from "react";
 import {
-  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList,
 } from "recharts";
 import api from "../api/client";
@@ -206,6 +206,90 @@ function TechnicalDashboard({ stats, role }) {
             </ResponsiveContainer>
           ) : (
             <p style={styles.noData}>No data available. Run a scan to see algorithm details.</p>
+          )}
+        </div>
+      </div>
+
+      {/* NEW: Service Identification Row */}
+      <div style={styles.chartsRow}>
+        {/* Pie — Service Category */}
+        <div style={styles.chartCard}>
+          <h3 style={styles.cardTitle}>Service Categories</h3>
+          {stats.service_distribution?.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie 
+                  data={stats.service_distribution} 
+                  dataKey="count" 
+                  nameKey="category" 
+                  cx="50%" cy="50%" 
+                  outerRadius={70} 
+                >
+                  {stats.service_distribution.map((entry, i) => (
+                    <Cell key={i} fill={["#3b82f6", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444"][i % 5]} />
+                  ))}
+                </Pie>
+                <Tooltip 
+                  contentStyle={{ background: "#1e293b", border: "1px solid #334155" }} 
+                  formatter={(v, n) => [v, n.replace('_', ' ').toUpperCase()]}
+                />
+                <Legend verticalAlign="bottom" height={36}/>
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p style={styles.noData}>No service category data.</p>
+          )}
+        </div>
+
+        {/* Bar — Server Software */}
+        <div style={styles.chartCard}>
+          <h3 style={styles.cardTitle}>Server Software</h3>
+          {stats.server_distribution?.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={stats.server_distribution} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                <XAxis type="number" hide />
+                <YAxis dataKey="server" type="category" tick={{ fill: "#94a3b8", fontSize: 11 }} width={80} />
+                <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155", fontSize: 12 }} />
+                <Bar dataKey="count" fill="#3b82f6" radius={[0, 4, 4, 0]}>
+                  {stats.server_distribution.map((entry, i) => (
+                    <Cell key={i} fill={["#3b82f6", "#60a5fa", "#93c5fd"][i % 3]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p style={styles.noData}>No server software data.</p>
+          )}
+        </div>
+      </div>
+
+      <div style={styles.chartsRow}>
+        {/* Pie — CDN / Load Balancer */}
+        <div style={styles.chartCard}>
+          <h3 style={styles.cardTitle}>CDN & Infrastructure</h3>
+          {stats.cdn_distribution?.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie 
+                  data={stats.cdn_distribution} 
+                  dataKey="count" 
+                  nameKey="provider" 
+                  cx="50%" cy="50%" 
+                  innerRadius={50}
+                  outerRadius={80} 
+                  paddingAngle={5}
+                >
+                  {stats.cdn_distribution.map((entry, i) => (
+                    <Cell key={i} fill={["#8b5cf6", "#a78bfa", "#c4b5fd"][i % 3]} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ background: "#1e293b", border: "1px solid #334155" }} />
+                <Legend verticalAlign="bottom" height={36}/>
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p style={styles.noData}>No CDN data identified.</p>
           )}
         </div>
       </div>

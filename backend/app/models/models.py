@@ -127,6 +127,7 @@ class Asset(Base):
     pqc_readiness = Column(SAEnum(PQCReadiness), default=PQCReadiness.VULNERABLE)
     open_ports = Column(JSON, default=list)
     service_category = Column(String(50), nullable=True)
+    server_software = Column(String(200), nullable=True)
     scan_method = Column(String(50), nullable=True)  # openssl_cli | python_ssl | testssl
     discovered_at = Column(DateTime, default=datetime.utcnow)
 
