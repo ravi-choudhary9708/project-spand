@@ -160,9 +160,20 @@ def get_scan_findings(
                 for r in (f.remediation_plan or [])
             ]
 
+            protocol_val = asset.protocol.value if hasattr(asset.protocol, "value") else str(asset.protocol)
+            scheme = ""
+            if protocol_val == "HTTPS":
+                scheme = "https://"
+            elif protocol_val == "HTTP":
+                scheme = "http://"
+            elif protocol_val in ["SMTP", "IMAP", "POP3", "FTPS", "SSH", "VPN"]:
+                scheme = f"{protocol_val.lower()}://"
+
+            asset_domain_with_proto = f"{scheme}{asset.domain}"
+
             all_findings.append({
                 "finding_id":      f.finding_id,
-                "asset_domain":    asset.domain,
+                "asset_domain":    asset_domain_with_proto,
                 "asset_id":        asset.asset_id,
                 "type":            f.type.value if hasattr(f.type, "value") else f.type,
                 "severity":        f.severity,

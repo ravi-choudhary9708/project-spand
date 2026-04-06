@@ -155,18 +155,28 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
         if full_scan:
             self.update_state(state="PROGRESS", meta={"progress": 5, "step": "Discovering subdomains (subfinder)"})
             expanded = []
+            root_domains = set()
+            
             for target in clean_targets:
                 # IP addresses: scan directly, no subfinder
                 if re.match(r"^\d+\.\d+\.\d+\.\d+$", target):
                     expanded.append(target)
-                    continue
-                subs = run_subfinder(target)
-                for sub in subs:
-                    cleaned = _clean_domain(sub)
-                    if cleaned and "." in cleaned:
-                        expanded.append(cleaned)
+                else:
+                    root_domains.add(_get_root_domain(target))
+                    expanded.append(target)
+                    
+            for root in root_domains:
+                try:
+                    subs = run_subfinder(root)
+                    for sub in subs:
+                        cleaned = _clean_domain(sub)
+                        if cleaned and "." in cleaned:
+                            expanded.append(cleaned)
+                except Exception as e:
+                    logger.warning(f"Subfinder failed for {root}: {e}")
+
             all_domains = list(set(expanded))
-            logger.info(f"subfinder discovered {len(all_domains)} unique domains")
+            logger.info(f"subfinder discovered {len(all_domains)} unique domains from {len(root_domains)} root(s)")
         else:
             self.update_state(state="PROGRESS", meta={"progress": 5, "step": "Targeted scan — skipping subdomain discovery"})
             all_domains = clean_targets
@@ -363,6 +373,16 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 final_algo     = main_algorithm or "RSA"
                 final_key_size = main_key_size  or 2048
                 sensitivity    = _get_data_sensitivity(domain)
+
+                # Fix for protocol UNKNOWN: If TLS/Bypass cipher suites exist, deduce protocol from port
+                if protocol == "UNKNOWN":
+                    if scan_data.get("cipher_suites"):
+                        _p = scan_data["cipher_suites"][0].get("port")
+                        if _p in [443, 8443, 8080]: protocol = "HTTPS"
+                        elif _p in [465, 587, 25]: protocol = "SMTP"
+                        elif _p in [993, 143]: protocol = "IMAP"
+                        elif _p in [995, 110]: protocol = "POP3"
+                        elif _p in [21, 990]: protocol = "FTPS"
 
                 # Extract TLS version for HNDL scoring
                 tls_version_str = tls_data.get("tls_version") or None
