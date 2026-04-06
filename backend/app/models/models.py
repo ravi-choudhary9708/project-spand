@@ -122,6 +122,7 @@ class Asset(Base):
     cdn_provider = Column(String(100), nullable=True)
     is_waf = Column(Boolean, default=False)
     hndl_score = Column(Float, default=0.0)
+    hndl_breakdown = Column(JSON, default=dict)
     is_pqc = Column(Boolean, default=False)
     pqc_readiness = Column(SAEnum(PQCReadiness), default=PQCReadiness.VULNERABLE)
     open_ports = Column(JSON, default=list)

@@ -50,7 +50,10 @@ def start_scan(
 
     # Dispatch to Celery in the correct queue
     full_scan = body.get("full_scan", True)
-    celery_app.send_task("app.tasks.scan_tasks.run_full_scan", args=[scan_id, full_scan], queue="scans")
+    task = celery_app.send_task("app.tasks.scan_tasks.run_full_scan", args=[scan_id, full_scan], queue="scans")
+    
+    scan.celery_task_id = task.id
+    db.commit()
 
     return {"scan_id": scan_id, "status": "PENDING", "message": "Scan queued successfully"}
 
@@ -201,6 +204,7 @@ def get_scan_assets(
             "domain":          a.domain,
             "resolved_ips":    a.resolved_ips or [],
             "hndl_score":      a.hndl_score,
+            "hndl_breakdown":  a.hndl_breakdown or {},
             "is_pqc":          a.is_pqc,
             "pqc_readiness":   a.pqc_readiness.value if a.pqc_readiness else None,
             "protocol":        a.protocol.value if hasattr(a.protocol, "value") else a.protocol,

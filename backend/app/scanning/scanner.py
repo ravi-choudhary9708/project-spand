@@ -12,6 +12,7 @@ Key improvements:
 """
 import subprocess
 import concurrent.futures
+import time
 import json
 import os
 import re
@@ -414,15 +415,24 @@ def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optiona
 # TLS
 # ─────────────────────────────────────────
 
-# Ports to try when probing origin IPs for WAF/CDN bypass
-BYPASS_PORTS = [443, 8443, 4443, 2053, 2083, 2087, 8080]
+# Ports to try when probing origin IPs for WAF/CDN bypass (kept small for speed)
+BYPASS_PORTS = [443, 8443, 8080]
+
+# Maximum seconds to spend on ALL bypass attempts per origin target
+_BYPASS_TIME_BUDGET = 60
 
 # CDN fingerprint headers — if ANY of these appear, we're still hitting an edge
 _CDN_FINGERPRINT_HEADERS = {
     "cf-ray", "x-amz-cf-id", "x-cache", "x-cdn",
     "x-akamai-transformed", "x-fastly-request-id",
+    "x-iinfo", "incap-sess-id", "visid_incap",  # Imperva/Incapsula
+    "zscaler", "x-zscaler-tenant",              # Zscaler
+    "x-tata-cdn",                               # Tata CDN
 }
-_CDN_SERVER_KEYWORDS = ("cloudflare", "akamai", "cloudfront", "fastly")
+_CDN_SERVER_KEYWORDS = (
+    "cloudflare", "akamai", "cloudfront", "fastly", 
+    "imperva", "incapsula", "zscaler", "tata", "cdn"
+)
 
 
 def _confirm_bypass_succeeded(
@@ -479,7 +489,7 @@ def _http_probe_cdn_headers(
         context.check_hostname = False
         context.verify_mode = _ssl.CERT_NONE
 
-        with socket.create_connection((origin_target, port), timeout=8) as sock:
+        with socket.create_connection((origin_target, port), timeout=3) as sock:
             with context.wrap_socket(sock, server_hostname=sni_domain) as ssock:
                 # Send minimal HTTP/1.1 request
                 request = (
@@ -553,7 +563,18 @@ def scan_via_origin_bypass(
     else:
         try_ports = BYPASS_PORTS
 
+    start_time = time.time()
+
     for try_port in try_ports:
+        # Enforce overall time budget
+        elapsed = time.time() - start_time
+        if elapsed > _BYPASS_TIME_BUDGET:
+            logger.info(
+                f"[origin-bypass] Time budget exhausted ({elapsed:.0f}s) "
+                f"for {sni_domain} via {origin_target}, stopping"
+            )
+            break
+
         result = _try_bypass_on_port(sni_domain, origin_target, try_port, ct_serial)
         if result.get("certificates") and result.get("bypass_confirmed", False):
             logger.info(
@@ -605,6 +626,21 @@ def _try_bypass_on_port(
 
     logger.info(f"[origin-bypass] {sni_domain} via {origin_target}:{port}")
 
+    # ── Quick TCP pre-check: skip if port is unreachable ──────────────────────
+    try:
+        pre_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        pre_sock.settimeout(3)
+        pre_result = pre_sock.connect_ex((origin_target, port))
+        pre_sock.close()
+        if pre_result != 0:
+            logger.debug(f"[origin-bypass] TCP pre-check failed for {origin_target}:{port}, skipping")
+            result["error"] = f"Port {port} unreachable"
+            return result
+    except Exception:
+        logger.debug(f"[origin-bypass] TCP pre-check error for {origin_target}:{port}, skipping")
+        result["error"] = f"Port {port} unreachable"
+        return result
+
     # ── Method 1: OpenSSL CLI ─────────────────────────────────────────────────
     if _openssl_available():
         try:
@@ -614,7 +650,7 @@ def _try_bypass_on_port(
                 "-connect", f"{origin_target}:{port}",
                 "-servername", sni_domain,
             ]
-            cipher_result = run_command(cipher_cmd, timeout=15, input_data="Q\n")
+            cipher_result = run_command(cipher_cmd, timeout=5, input_data="Q\n")
             stdout = cipher_result["stdout"]
 
             cipher_match = re.search(r"Cipher\s*:\s*(\S+)", stdout)
@@ -625,24 +661,22 @@ def _try_bypass_on_port(
             if proto_match:
                 result["tls_version"] = proto_match.group(1).replace("TLSv", "TLS ")
 
-            # Get certificate
-            pem = _get_cert_pem_via_openssl(sni_domain, port)
-            # If that fails (WAF blocked direct), try via origin target
-            if not pem:
-                fetch_cmd = [
-                    "openssl", "s_client",
-                    "-connect", f"{origin_target}:{port}",
-                    "-servername", sni_domain,
-                    "-showcerts",
-                ]
-                fetch_result = run_command(fetch_cmd, timeout=15, input_data="Q\n")
-                match = re.search(
-                    r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
-                    fetch_result["stdout"],
-                    re.DOTALL,
-                )
-                if match:
-                    pem = match.group(1)
+            # Get certificate directly via origin target (skip domain — we already know it's behind CDN)
+            pem = None
+            fetch_cmd = [
+                "openssl", "s_client",
+                "-connect", f"{origin_target}:{port}",
+                "-servername", sni_domain,
+                "-showcerts",
+            ]
+            fetch_result = run_command(fetch_cmd, timeout=5, input_data="Q\n")
+            match = re.search(
+                r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)",
+                fetch_result["stdout"],
+                re.DOTALL,
+            )
+            if match:
+                pem = match.group(1)
 
             if pem:
                 cert_info = _parse_openssl_x509(pem)
@@ -684,7 +718,7 @@ def _try_bypass_on_port(
         context.check_hostname = False
         context.verify_mode    = _ssl.CERT_NONE   # origin may not match CN
 
-        with socket.create_connection((origin_target, port), timeout=10) as sock:
+        with socket.create_connection((origin_target, port), timeout=5) as sock:
             with context.wrap_socket(sock, server_hostname=sni_domain) as ssock:
                 result["tls_version"] = ssock.version()
                 cipher = ssock.cipher()
@@ -785,7 +819,7 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
     Falls back to the next method if the current one returns no certificates.
     """
     if is_tool_available("testssl.sh"):
-        result = _run_testssl(domain, port)
+        result = _run_testssl(domain, port, starttls)
         if result.get("certificates"):
             return result
 
@@ -1039,18 +1073,20 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
     return result
 
 
-def _run_testssl(domain: str, port: int = 443) -> Dict[str, Any]:
-    run_command(
-        ["testssl.sh", "--jsonfile", "/tmp/testssl.json", "--quiet", f"{domain}:{port}"],
-        timeout=180
-    )
+def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
+    cmd = ["testssl.sh", "--jsonfile", "/tmp/testssl.json", "--quiet"]
+    if starttls:
+        cmd.extend(["-t", starttls])
+    cmd.append(f"{domain}:{port}")
+    
+    run_command(cmd, timeout=180)
 
     try:
         with open("/tmp/testssl.json") as f:
             return json.load(f)
     except Exception:
         if _openssl_available():
-            return _openssl_tls_scan(domain, port)
+            return _openssl_tls_scan(domain, port, starttls)
         return _python_tls_scan(domain, port)
 
 
@@ -1177,10 +1213,23 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
 # ─────────────────────────────────────────
 
 def _detect_cdn(domain: str, ip: str) -> bool:
-    cdn_keywords = ["cloudflare", "akamai", "fastly", "cloudfront", "cdn"]
+    # 1. Check HTTP response headers (most reliable)
+    headers = _http_probe_cdn_headers(ip, 443, domain)
+    if not headers:
+        headers = _http_probe_cdn_headers(ip, 80, domain)
+        
+    if headers:
+        for h in headers:
+            if h.lower() in _CDN_FINGERPRINT_HEADERS:
+                return True
+        server = str(headers.get("server", "")).lower()
+        if any(kw in server for kw in _CDN_SERVER_KEYWORDS):
+            return True
+
+    # 2. Fallback to reverse DNS check
     try:
         hostname = socket.gethostbyaddr(ip)[0].lower()
-        return any(k in hostname for k in cdn_keywords)
+        return any(k in hostname for k in _CDN_SERVER_KEYWORDS)
     except Exception:
         return False
 

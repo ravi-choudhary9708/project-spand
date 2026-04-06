@@ -8,7 +8,7 @@ Updated Formula:
                     + (Certificate Expiry Risk × 0.10)
 """
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple, Dict
 
 
 # Quantum vulnerability scores for algorithms (0-10)
@@ -122,11 +122,15 @@ def calculate_hndl_score(
     data_sensitivity: float = 5.0,  # 0-10, org-provided
     expires_at: Optional[datetime] = None,
     tls_version: Optional[str] = None,
-) -> float:
+) -> Tuple[float, Dict[str, float]]:
     """
     Calculate HNDL risk score using the updated formula:
     Score = (AlgVuln × 0.40) + (KeySizeRisk × 0.20) + (DataSensitivity × 0.20)
           + (TLSVersionRisk × 0.10) + (CertExpiry × 0.10)
+          
+    Returns:
+    - hndl_score: The final computed score
+    - breakdown: A dictionary of the individual risk factors (unweighted)
     """
     alg_score = get_algorithm_vulnerability_score(algorithm)
     key_score = get_key_size_risk(key_size, algorithm)
@@ -140,7 +144,13 @@ def calculate_hndl_score(
         (tls_score * 0.10) +
         (expiry_score * 0.10)
     )
-    return round(min(max(hndl, 0.0), 10.0), 2)
+    return round(min(max(hndl, 0.0), 10.0), 2), {
+        "algorithm_risk": alg_score,
+        "key_size_risk": key_score,
+        "data_sensitivity": data_sensitivity,
+        "tls_version_risk": tls_score,
+        "expiry_risk": expiry_score,
+    }
 
 
 def is_quantum_vulnerable(algorithm: str) -> bool:

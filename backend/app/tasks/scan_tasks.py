@@ -35,7 +35,8 @@ from app.scanning.ct_log_scanner import (
 )
 from app.engines.hndl_engine import (
     calculate_hndl_score, is_quantum_vulnerable,
-    get_pqc_readiness_label, is_pqc_ready
+    get_pqc_readiness_label, is_pqc_ready,
+    get_algorithm_vulnerability_score
 )
 from app.engines.compliance_engine import map_finding_to_compliance
 from app.engines.ai_remediation import get_remediation_playbook
@@ -190,13 +191,19 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
 
         for i, domain in enumerate(all_domains):
 
+            # Close and recreate db session to prevent cross-domain pollution/corruption if rollback hits
+            db.close()
+            db = SessionLocal()
+            scan_job = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
+
             progress = int(10 + (i / max(total, 1)) * 78)
             self.update_state(state="PROGRESS", meta={
                 "progress": progress,
                 "step":     f"Scanning {domain} ({i+1}/{total})"
             })
-            scan_job.progress = progress
-            db.commit()
+            if scan_job:
+                scan_job.progress = progress
+                db.commit()
 
             try:
                 # 4a: Network scan (nmap + TLS via openssl / python ssl)
@@ -275,7 +282,18 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                                     "cert_domain": domain, "source": "passive_dns",
                                 })
 
-                        for target in origin_targets:
+                        # Limit origin targets to avoid excessive scanning
+                        import time as _time
+                        _b1_start = _time.time()
+                        _B1_TIME_BUDGET = 90   # seconds for ALL bypass attempts
+                        _B1_MAX_TARGETS = 3     # try at most 3 origin IPs
+
+                        for idx, target in enumerate(origin_targets[:_B1_MAX_TARGETS]):
+                            # Enforce time budget
+                            if _time.time() - _b1_start > _B1_TIME_BUDGET:
+                                logger.info(f"{domain}: [PATH B1] time budget exhausted, stopping bypass")
+                                break
+
                             t_value = target.get("value", "")
                             if not t_value:
                                 continue
@@ -349,9 +367,13 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 # Extract TLS version for HNDL scoring
                 tls_version_str = tls_data.get("tls_version") or None
 
-                asset_hndl = calculate_hndl_score(
+                # Unpack tuple returned by calculate_hndl_score
+                asset_hndl_result = calculate_hndl_score(
                     final_algo, final_key_size, sensitivity, expires_at, tls_version_str
                 )
+                asset_hndl = asset_hndl_result[0] if isinstance(asset_hndl_result, tuple) else asset_hndl_result
+                hndl_breakdown = asset_hndl_result[1] if isinstance(asset_hndl_result, tuple) else {}
+
                 pqc_label  = get_pqc_readiness_label(asset_hndl)
 
                 # 4c: Save Asset ───────────────────────────────────
@@ -365,6 +387,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     open_ports=open_ports,
                     service_category=_get_service_category(protocol),
                     hndl_score=asset_hndl,
+                    hndl_breakdown=hndl_breakdown,
                     is_pqc=is_pqc_ready(final_algo),
                     pqc_readiness=_map_pqc_readiness(pqc_label),
                     scan_method=algorithm_source,  # track which path was used
@@ -430,7 +453,8 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 for suite_data in scan_data.get("cipher_suites", []):
                     kex  = suite_data.get("key_exchange", "RSA")
                     tver = suite_data.get("tls_version", "TLS 1.2")
-                    qr   = calculate_hndl_score(kex)
+                    # Use algorithm-specific vulnerability score for cipher suites (not 5-factor HNDL)
+                    qr   = get_algorithm_vulnerability_score(kex)
 
                     db.add(CipherSuite(
                         suite_id              = str(uuid.uuid4()),
@@ -538,13 +562,19 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 continue
 
         # ── STEP 5: Generate CBOM ─────────────────────────────────
-        self.update_state(state="PROGRESS", meta={"progress": 90, "step": "Generating CBOM"})
-        _generate_scan_cbom(db, scan_job, processed_assets)
+        # Refresh session once more for final packaging
+        db.close()
+        db = SessionLocal()
+        scan_job = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
 
-        scan_job.status      = ScanStatus.COMPLETED
-        scan_job.completed_at= datetime.utcnow()
-        scan_job.progress    = 100
-        db.commit()
+        self.update_state(state="PROGRESS", meta={"progress": 90, "step": "Generating CBOM"})
+        if scan_job:
+            _generate_scan_cbom(db, scan_job, processed_assets)
+
+            scan_job.status      = ScanStatus.COMPLETED
+            scan_job.completed_at= datetime.utcnow()
+            scan_job.progress    = 100
+            db.commit()
 
         self.update_state(state="SUCCESS", meta={"progress": 100, "step": "Complete"})
 
@@ -600,7 +630,7 @@ def _create_finding(db, asset_id, ftype, severity, hndl, cwe, title, desc, algo=
             details     = {"algorithm": algo},
         )
         db.add(f)
-        db.flush()
+        # We don't flush here so we don't accidentally poison the transaction if it fails
         return f
     except Exception as e:
         logger.error(f"_create_finding failed: {e}")

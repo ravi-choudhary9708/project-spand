@@ -80,6 +80,7 @@ export default function ScansPage() {
   const [showModal, setShowModal] = useState(false)
   const [selected, setSelected] = useState(null)
   const [findings, setFindings] = useState([])
+  const [assets, setAssets] = useState([])
 
   useEffect(() => { loadScans() }, [])
 
@@ -91,7 +92,17 @@ export default function ScansPage() {
 
   const selectScan = async (scan) => {
     setSelected(scan)
-    try { const r = await api.get(`/scans/${scan.scan_id}/findings`); setFindings(r.data) } catch { setFindings([]) }
+    try { 
+      const [fRes, aRes] = await Promise.all([
+        api.get(`/scans/${scan.scan_id}/findings`),
+        api.get(`/scans/${scan.scan_id}/assets`)
+      ]);
+      setFindings(fRes.data)
+      setAssets(aRes.data)
+    } catch { 
+      setFindings([])
+      setAssets([]) 
+    }
   }
 
   const cancelScan = async (scanId) => {
@@ -195,6 +206,47 @@ export default function ScansPage() {
                         <span className={`badge badge-${f.severity.toLowerCase()}`}>{f.severity}</span>
                       </div>
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>HNDL: {f.hndl_score?.toFixed(1)} | {f.asset_domain}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {assets?.length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8 }}>ASSET CRYPTOGRAPHIC PROFILES</div>
+                  {assets.map(a => (
+                    <div key={a.asset_id} style={{ marginBottom: 12, padding: "10px 12px", background: 'rgba(255,255,255,0.03)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.05)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <strong style={{ fontSize: 13 }}>{a.domain}</strong>
+                        <span className={`badge ${a.is_pqc ? 'badge-safe' : 'badge-critical'}`} style={{ fontSize: 10 }}>{a.protocol}</span>
+                      </div>
+                      
+                      {a.hndl_breakdown && Object.keys(a.hndl_breakdown).length > 0 && (
+                        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                          <span style={{ color: 'var(--accent-cyan)' }}>HNDL Breakdown:</span>
+                          <span>Alg: <strong style={{ color: 'white' }}>{a.hndl_breakdown.algorithm_risk}</strong></span>
+                          <span>Key: <strong style={{ color: 'white' }}>{a.hndl_breakdown.key_size_risk}</strong></span>
+                          <span>TLS: <strong style={{ color: 'white' }}>{a.hndl_breakdown.tls_version_risk}</strong></span>
+                          <span>Sens: <strong style={{ color: 'white' }}>{a.hndl_breakdown.data_sensitivity}</strong></span>
+                          <span>Expiry: <strong style={{ color: 'white' }}>{a.hndl_breakdown.expiry_risk}</strong></span>
+                        </div>
+                      )}
+
+                      {a.cipher_suites?.length > 0 && (
+                        <div style={{ fontSize: 11 }}>
+                          <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>Supported Cipher Suites ({a.cipher_suites.length}):</div>
+                          <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+                            {a.cipher_suites.map(cs => (
+                               <div key={cs.suite_id} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', borderBottom: '1px dotted rgba(255,255,255,0.1)' }}>
+                                 <span style={{ color: 'var(--text-muted)' }}>{cs.name} <span style={{ opacity: 0.5 }}>({cs.tls_version})</span></span>
+                                 <span style={{ color: cs.is_quantum_vulnerable ? 'var(--error-red)' : 'var(--success-green)' }}>
+                                   {cs.key_exchange} (Risk: {cs.quantum_risk})
+                                 </span>
+                               </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
