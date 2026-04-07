@@ -83,11 +83,18 @@ export default function FindingsPage() {
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 16 }}>{selected.cwe_id} · {selected.type}</div>
               <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 16, lineHeight: 1.6 }}>{selected.description}</div>
 
-              <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: 14, marginBottom: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>⚠️ QUANTUM RISK</div>
-                <div style={{ fontSize: 13 }}>HNDL Score: <strong style={{ color: sevColor[selected.severity] }}>{selected.hndl_score?.toFixed(2)}</strong></div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Quantum Risk Score: {selected.quantum_risk?.toFixed(2)}</div>
-              </div>
+              { (selected.type === 'QUANTUM_VULNERABLE_ALGORITHM' || selected.quantum_risk > 0) && (
+                <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: 14, marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 6 }}>⚠️ QUANTUM RISK</div>
+                  <div style={{ fontSize: 13 }}>HNDL Score: <strong style={{ color: sevColor[selected.severity] }}>{selected.hndl_score?.toFixed(2)}</strong></div>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>Quantum Risk Score: {selected.quantum_risk?.toFixed(2)}</div>
+                </div>
+              )}
+              { selected.type !== 'QUANTUM_VULNERABLE_ALGORITHM' && !selected.quantum_risk && selected.hndl_score > 0 && (
+                <div style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 8, padding: 14, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13 }}>HNDL Score Impact: <strong style={{ color: sevColor[selected.severity] }}>{selected.hndl_score?.toFixed(2)}</strong></div>
+                </div>
+              )}
 
               {selected.compliance_tags?.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
