@@ -502,6 +502,46 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                             tver,
                         )
 
+                # 4e2: testssl vulnerability findings ──────────────
+                # If testssl ran, it returns vulnerability entries (BEAST, BREACH, etc.)
+                testssl_vulns = tls_data.get("vulnerabilities", [])
+                for vuln in testssl_vulns:
+                    vuln_type = vuln.get("type", "OTHER")
+                    finding_type = FindingType.OUTDATED_TLS if vuln_type == "OUTDATED_TLS" else FindingType.OTHER
+                    vuln_finding = _create_finding(
+                        db, asset.asset_id,
+                        finding_type,
+                        vuln.get("severity", "MEDIUM"),
+                        asset_hndl,
+                        vuln.get("cwe", "CWE-310"),
+                        vuln.get("title", "Unknown Vulnerability"),
+                        vuln.get("description", "Detected by testssl.sh"),
+                        final_algo,
+                    )
+                    if vuln_finding:
+                        # Add compliance tags for testssl-detected vulns
+                        for v in map_finding_to_compliance(final_algo, tls_data.get("tls_version", "")):
+                            db.add(ComplianceTag(
+                                tag_id      = str(uuid.uuid4()),
+                                finding_id  = vuln_finding.finding_id,
+                                framework   = v["framework"],
+                                control_ref = v["control_ref"],
+                                status      = "NON_COMPLIANT",
+                                description = v["description"],
+                            ))
+
+                # Also check for deprecated protocol findings from cipher suites
+                for suite_data in scan_data.get("cipher_suites", []):
+                    tver = suite_data.get("tls_version", "")
+                    if tver in ("TLS 1.0", "TLS 1.1", "SSL 3.0", "SSL 2.0", "SSLv3", "SSLv2"):
+                        _create_finding(
+                            db, asset.asset_id, FindingType.OUTDATED_TLS,
+                            "HIGH" if "SSL" in tver else "MEDIUM", 7.5, "CWE-326",
+                            f"Deprecated Protocol Supported: {tver}",
+                            f"Service supports {tver} which is deprecated. Migration to TLS 1.2+ is required.",
+                            tver,
+                        )
+
                 # 4f: Quantum-vulnerability finding ────────────────
                 if is_quantum_vulnerable(final_algo):
 

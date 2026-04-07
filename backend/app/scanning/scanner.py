@@ -1082,7 +1082,12 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
 def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
     """
     Parse the list output of testssl.sh into our unified Dict format.
-    Handles the case where data is a list of findings rather than a dict.
+    Handles:
+      - Certificate fields with <hostCert#N> prefixed IDs
+      - cert_signatureAlgorithm (not cert_algorithm)
+      - Protocol offering entries (SSLv2, SSLv3, TLS1, TLS1_1, etc.)
+      - Cipher suite entries
+      - Vulnerability findings (BEAST, BREACH, heartbleed, etc.)
     """
     result = {
         "domain": domain,
@@ -1092,6 +1097,7 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
         "certificates": [],
         "cipher_suites": [],
         "supported_versions": [],
+        "vulnerabilities": [],      # NEW: testssl vulnerability findings
         "error": None,
         "scan_method": "testssl",
     }
@@ -1099,86 +1105,177 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
     if not isinstance(data, list):
         return result
 
-    # Standard cert fields
+    # Standard cert fields — we take the first hostCert only
     cert = {
-        "algorithm": "RSA",
-        "key_size": 2048,
+        "algorithm": None,
+        "key_size": None,
         "subject": {},
         "issuer": {},
         "notAfter": "",
         "serialNumber": "",
         "subjectAltName": [],
     }
-    
+
     found_cert = False
-    
+
+    # ---------- Known vulnerability IDs from testssl ----------
+    VULN_MAP = {
+        "heartbleed":    {"title": "Heartbleed (CVE-2014-0160)",        "cwe": "CWE-119", "severity_not_ok": "CRITICAL"},
+        "CCS":           {"title": "CCS Injection (CVE-2014-0224)",     "cwe": "CWE-310", "severity_not_ok": "HIGH"},
+        "ticketbleed":   {"title": "Ticketbleed (CVE-2016-9244)",      "cwe": "CWE-200", "severity_not_ok": "HIGH"},
+        "ROBOT":         {"title": "ROBOT Attack (CVE-2017-13099)",     "cwe": "CWE-203", "severity_not_ok": "HIGH"},
+        "CRIME_TLS":     {"title": "CRIME TLS Compression Attack",     "cwe": "CWE-310", "severity_not_ok": "HIGH"},
+        "BREACH":        {"title": "BREACH HTTP Compression Attack",   "cwe": "CWE-310", "severity_not_ok": "MEDIUM"},
+        "POODLE_SSL":    {"title": "POODLE SSLv3 (CVE-2014-3566)",     "cwe": "CWE-310", "severity_not_ok": "HIGH"},
+        "fallback_SCSV": {"title": "TLS Fallback SCSV Missing",        "cwe": "CWE-757", "severity_not_ok": "MEDIUM"},
+        "SWEET32":       {"title": "SWEET32 (CVE-2016-2183)",          "cwe": "CWE-326", "severity_not_ok": "MEDIUM"},
+        "FREAK":         {"title": "FREAK Attack (CVE-2015-0204)",     "cwe": "CWE-310", "severity_not_ok": "HIGH"},
+        "DROWN":         {"title": "DROWN Attack (CVE-2016-0800)",     "cwe": "CWE-310", "severity_not_ok": "CRITICAL"},
+        "LOGJAM":        {"title": "LOGJAM Attack (CVE-2015-4000)",    "cwe": "CWE-310", "severity_not_ok": "HIGH"},
+        "BEAST":         {"title": "BEAST Attack (CVE-2011-3389)",     "cwe": "CWE-310", "severity_not_ok": "MEDIUM"},
+        "BEAST_CBC_TLS1":{"title": "BEAST CBC TLS 1.0",                "cwe": "CWE-310", "severity_not_ok": "MEDIUM"},
+        "LUCKY13":       {"title": "LUCKY13 (CVE-2013-0169)",          "cwe": "CWE-310", "severity_not_ok": "LOW"},
+        "winshock":      {"title": "WinShock (CVE-2014-6321)",         "cwe": "CWE-310", "severity_not_ok": "HIGH"},
+        "RC4":           {"title": "RC4 Cipher Support (CVE-2013-2566)","cwe": "CWE-326","severity_not_ok": "MEDIUM"},
+    }
+
+    # Deprecated protocol IDs
+    DEPRECATED_PROTOCOLS = {"SSLv2", "SSLv3", "TLS1", "TLS1_1"}
+
     for entry in data:
         eid = entry.get("id", "")
         finding = entry.get("finding", "")
-        
-        # Mapping certificate details
-        if eid == "cert_keySize":
-            m = re.search(r"(\d+)", finding)
-            if m: cert["key_size"] = int(m.group(1))
+        severity = entry.get("severity", "")
+
+        # --- Strip <hostCert#N> prefix for cert field matching ---
+        # testssl emits IDs like: "cert_keySize <hostCert#1>"
+        base_eid = re.sub(r"\s*<hostCert#\d+>", "", eid).strip()
+
+        # Only process the first host cert (hostCert#1) to avoid duplicates
+        if "<hostCert#" in eid and "<hostCert#1>" not in eid:
+            continue
+
+        # ── Certificate details ──────────────────────────────────
+        if base_eid == "cert_keySize":
+            # Finding like: "RSA 2048 bits (exponent is 65537)" or "EC 256 bits"
+            m = re.search(r"(\d+)\s*bit", finding)
+            if m:
+                cert["key_size"] = int(m.group(1))
+            # Also extract algo from key size line if present
+            algo_m = re.match(r"(RSA|EC|ECDSA|DSA|Ed25519|Ed448)", finding.strip(), re.IGNORECASE)
+            if algo_m and not cert["algorithm"]:
+                cert["algorithm"] = _normalize_algorithm(algo_m.group(1))
             found_cert = True
-        elif eid == "cert_algorithm":
-            cert["algorithm"] = finding
+
+        elif base_eid == "cert_signatureAlgorithm":
+            # Finding like: "SHA256 with RSA"
+            cert["algorithm"] = _normalize_algorithm(finding.strip())
             found_cert = True
-        elif eid == "cert_issuer":
-            cert["issuer"]["commonName"] = finding
+
+        elif base_eid == "cert_algorithm":  # older testssl versions
+            if not cert["algorithm"]:
+                cert["algorithm"] = _normalize_algorithm(finding.strip())
             found_cert = True
-        elif eid == "cert_commonName":
-            cert["subject"]["commonName"] = finding
+
+        elif base_eid in ("cert_commonName", "cert_CN"):
+            cert["subject"]["commonName"] = finding.strip()
             found_cert = True
-        elif eid == "cert_notAfter":
-            cert["notAfter"] = finding
+
+        elif base_eid == "cert_issuer":
+            cert["issuer"]["commonName"] = finding.strip()
             found_cert = True
-        elif eid == "cert_serial":
-            cert["serialNumber"] = finding
+
+        elif base_eid == "cert_notAfter":
+            cert["notAfter"] = finding.strip()
             found_cert = True
-            
-        # Mapping Protocols (pick highest)
-        if eid.startswith("protocol_") and "offered" in finding.lower():
+
+        elif base_eid in ("cert_serial", "cert_serialNumber"):
+            cert["serialNumber"] = finding.strip()
+            found_cert = True
+
+        elif base_eid == "cert_subjectAltName":
+            # SANs are space-separated
+            cert["subjectAltName"] = [s.strip() for s in finding.split() if "." in s]
+            found_cert = True
+
+        # ── Protocol offerings ───────────────────────────────────
+        elif eid in ("SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3"):
+            if "offered" in finding.lower():
+                proto_name = eid.replace("TLS1_3", "TLS 1.3").replace("TLS1_2", "TLS 1.2") \
+                                 .replace("TLS1_1", "TLS 1.1").replace("TLS1", "TLS 1.0") \
+                                 .replace("SSLv3", "SSL 3.0").replace("SSLv2", "SSL 2.0")
+                result["supported_versions"].append(proto_name)
+                # Highest offered becomes primary
+                if not result["tls_version"] or "1.3" in proto_name:
+                    result["tls_version"] = proto_name
+
+                # Flag deprecated protocols as vulnerability findings
+                if eid in DEPRECATED_PROTOCOLS:
+                    result["vulnerabilities"].append({
+                        "title": f"Deprecated Protocol: {proto_name}",
+                        "description": f"Server offers {proto_name} which is deprecated and insecure. {finding}",
+                        "severity": "HIGH" if eid in ("SSLv2", "SSLv3") else "MEDIUM",
+                        "cwe": "CWE-326",
+                        "type": "OUTDATED_TLS",
+                    })
+
+        elif eid.startswith("protocol_") and "offered" in finding.lower():
             proto = eid.replace("protocol_", "").replace("_", ".")
-            # Naive "highest" selection: basically if we haven't found one yet or it's TLS 1.3
             if not result["tls_version"] or "1.3" in proto:
                 result["tls_version"] = proto
-        
-        # In case protocol_ is missing, check if it's in finding text from protocols test
-        if eid in ["SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3"] and "offered" in finding.lower():
-            proto_sh = eid.replace("TLS", "TLS ").replace("SSL", "SSL ")
-            if not result["tls_version"] or "1.3" in proto_sh:
-                 result["tls_version"] = proto_sh
 
-        # Mapping Ciphers
-        if eid.startswith("cipher-"):
-            # testssl findings are often: "   ECDH 256   AES         256      TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
-            # We want the RFC name at the end (e.g. TLS_...)
+        # ── Cipher suites ────────────────────────────────────────
+        elif eid.startswith("cipher-") or eid.startswith("cipherorder_"):
             cname = finding.strip()
-            # If it's multi-column, try to take the last part that looks like a cipher name
             parts = cname.split()
             if parts:
-                # Look for something starting with TLS_ or containing _WITH_
                 for p in reversed(parts):
-                    if p.startswith("TLS_") or "_WITH_" in p or "-" in p:
+                    if p.startswith("TLS_") or "_WITH_" in p or ("-" in p and len(p) > 8):
                         cname = p
                         break
-            
-            if cname:
+
+            if cname and len(cname) > 3:
                 result["cipher_suites"].append({
                     "name": cname,
                     "tls_version": result["tls_version"] or "Unknown",
                     "key_exchange": _extract_key_exchange(cname),
-                    "is_quantum_vulnerable": True, # testssl usually doesn't scan PQC yet
-                    "quantum_risk": 9.0 if "RSA" in cname or "ECDSA" in cname else 5.0,
+                    "is_quantum_vulnerable": True,
+                    "quantum_risk": 9.0 if "RSA" in cname else 5.0,
                 })
-                # Set as primary if not set
                 if not result["cipher_suite"]:
                     result["cipher_suite"] = cname
 
+        # ── Vulnerability findings ───────────────────────────────
+        else:
+            # Strip any <hostCert#N> prefix for matching
+            clean_eid = base_eid
+            if clean_eid in VULN_MAP:
+                vuln_info = VULN_MAP[clean_eid]
+                is_vulnerable = severity not in ("OK", "INFO") or "vulnerable" in finding.lower()
+                # Only report if actually vulnerable (not "not vulnerable")
+                if "not vulnerable" in finding.lower() or "not offered" in finding.lower():
+                    is_vulnerable = False
+                if "potentially vulnerable" in finding.lower() or "vulnerable" == finding.lower().split()[0] if finding else False:
+                    is_vulnerable = True
+
+                if is_vulnerable:
+                    result["vulnerabilities"].append({
+                        "title": vuln_info["title"],
+                        "description": f"{finding.strip()} (detected by testssl.sh)",
+                        "severity": vuln_info["severity_not_ok"],
+                        "cwe": vuln_info["cwe"],
+                        "type": "OTHER",
+                    })
+
+    # Apply defaults for missing cert fields
+    if not cert["algorithm"]:
+        cert["algorithm"] = "RSA"
+    if not cert["key_size"]:
+        cert["key_size"] = 2048
+
     if found_cert:
         result["certificates"].append(cert)
-        
+
     return result
 
 
@@ -1187,9 +1284,9 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -
     json_path = f"/tmp/testssl_{int(time.time())}.json"
     cmd = ["testssl.sh", "--jsonfile", json_path, "--quiet"]
     if starttls:
-        cmd.extend(["-t", starttls])
+        cmd.extend(["--starttls", starttls])  # Fixed: was "-t"
     cmd.append(f"{domain}:{port}")
-    
+
     logger.info(f"[testssl] Running scan for {domain}:{port}...")
     run_command(cmd, timeout=300)
 
@@ -1200,7 +1297,7 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -
                 if not content:
                     logger.warning(f"[testssl] JSON file for {domain} is empty")
                     raise ValueError("Empty JSON output")
-                
+
                 try:
                     raw_data = json.loads(content)
                 except json.JSONDecodeError:
@@ -1218,11 +1315,11 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -
                                 raw_data.append(json.loads(m.group(0)))
                             except:
                                 pass
-                
+
             # Cleanup
             try: os.remove(json_path)
             except: pass
-            
+
             return _parse_testssl_json(raw_data, domain, port)
     except (json.JSONDecodeError, ValueError) as json_err:
         logger.error(f"[testssl] Malformed JSON for {domain}: {json_err}")
@@ -1232,7 +1329,7 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -
             except: pass
     except Exception as e:
         logger.error(f"[testssl] Error reading results for {domain}: {e}")
-        
+
     # Fallback if testssl failed or produced invalid data
     logger.info(f"[testssl] Falling back to OpenSSL/Python for {domain}:{port}")
     if _openssl_available():
