@@ -1,0 +1,50 @@
+qps_backend  |     total_assets = db.query(Asset).count()
+qps_backend  |                    ^^^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/query.py", line 3112, in count
+qps_backend  |     self._legacy_from_self(col).enable_eagerloads(False).scalar()
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/query.py", line 2805, in scalar
+qps_backend  |     ret = self.one()
+qps_backend  |           ^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/query.py", line 2778, in one
+qps_backend  |     return self._iter().one()  # type: ignore
+qps_backend  |            ^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/query.py", line 2827, in _iter
+qps_backend  |     result: Union[ScalarResult[_T], Result[_T]] = self.session.execute(
+qps_backend  |                                                   ^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 2306, in execute
+qps_backend  |     return self._execute_internal(
+qps_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 2191, in _execute_internal
+qps_backend  |     result: Result[Any] = compile_state_cls.orm_execute_statement(
+qps_backend  |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/context.py", line 293, in orm_execute_statement
+qps_backend  |     result = conn.execute(
+qps_backend  |              ^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
+qps_backend  |     return meth(
+qps_backend  |            ^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/sql/elements.py", line 514, in _execute_on_connection
+qps_backend  |     return connection._execute_clauseelement(
+qps_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
+qps_backend  |     ret = self._execute_context(
+qps_backend  |           ^^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1849, in _execute_context
+qps_backend  |     return self._exec_single_context(
+qps_backend  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1989, in _exec_single_context
+qps_backend  |     self._handle_dbapi_exception(
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 2356, in _handle_dbapi_exception
+qps_backend  |     raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1970, in _exec_single_context
+qps_backend  |     self.dialect.do_execute(
+qps_backend  |   File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 924, in do_execute
+qps_backend  |     cursor.execute(statement, parameters)
+qps_backend  | sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column assets.server_software does not exist
+qps_backend  | LINE 2: ...sets.service_category AS assets_service_category, assets.ser...
+qps_backend  |                                                              ^
+qps_backend  | 
+qps_backend  | [SQL: SELECT count(*) AS count_1 
+qps_backend  | FROM (SELECT assets.asset_id AS assets_asset_id, assets.scan_id AS assets_scan_id, assets.domain AS assets_domain, assets.resolved_ips AS assets_resolved_ips, assets.protocol AS assets_protocol, assets.is_cdn AS assets_is_cdn, assets.cdn_provider AS assets_cdn_provider, assets.is_waf AS assets_is_waf, assets.hndl_score AS assets_hndl_score, assets.hndl_breakdown AS assets_hndl_breakdown, assets.is_pqc AS assets_is_pqc, assets.pqc_readiness AS assets_pqc_readiness, assets.open_ports AS assets_open_ports, assets.service_category AS assets_service_category, assets.server_software AS assets_server_software, assets.scan_method AS assets_scan_method, assets.discovered_at AS assets_discovered_at 
+qps_backend  | FROM assets) AS anon_1]
+qps_backend  | (Background on this error at: https://sqlalche.me/e/20/f405)

@@ -137,6 +137,30 @@ function CipherRow({ s }) {
   )
 }
 
+/* ── HNDL color helper ───────────────────────────────── */
+const hndlColor = (s) => {
+  if (!s && s !== 0) return '#6b7280'
+  if (s >= 7.5) return '#ef4444'
+  if (s >= 5) return '#f97316'
+  if (s >= 2.5) return '#f59e0b'
+  return '#10b981'
+}
+
+/* ── Detail KPI card ─────────────────────────────────── */
+function DetailKpi({ label, value, color }) {
+  return (
+    <div style={{
+      padding: '10px 12px',
+      background: 'rgba(0,0,0,0.25)',
+      border: '1px solid rgba(255,255,255,0.07)',
+      borderRadius: 10,
+    }}>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, letterSpacing: 0.5, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 700, color: color || 'var(--text-primary)', wordBreak: 'break-word' }}>{value || '—'}</div>
+    </div>
+  )
+}
+
 /* ── Asset detail panel ──────────────────────────────── */
 function AssetDetail({ asset, onClose }) {
   const tlsData = asset.tls_data || {}

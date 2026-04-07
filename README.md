@@ -338,15 +338,22 @@ The system uses 9 PostgreSQL tables:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| GET | `/api/health` | Health check status |
 | POST | `/api/auth/login` | Login, returns JWT |
+| GET | `/api/auth/me` | Get current user profile |
+| POST | `/api/auth/logout` | Logout user |
 | GET | `/api/dashboard` | All metrics for dashboard |
+| GET | `/api/dashboard/stats` | Alias for dashboard metrics |
 | POST | `/api/scans` | Start a new scan |
 | GET | `/api/scans` | List all scans |
-| GET | `/api/scans/{id}` | Get scan status + progress |
-| GET | `/api/scans/{id}/findings` | All findings for a scan |
-| GET | `/api/scans/{id}/cbom` | CycloneDX CBOM for a scan |
+| GET | `/api/scans/{scan_id}` | Get scan status + progress |
+| GET | `/api/scans/{scan_id}/findings`| All findings for a scan |
+| GET | `/api/scans/{scan_id}/assets` | All assets for a scan |
+| GET | `/api/scans/{scan_id}/cbom` | CycloneDX CBOM for a scan |
+| DELETE| `/api/scans/{scan_id}` | Delete a scan (Admin only) |
 | GET | `/api/assets` | Asset inventory (filterable) |
-| GET | `/api/assets/{id}` | Asset detail with certs + ciphers |
+| GET | `/api/assets/{asset_id}` | Asset detail with certs + ciphers |
+| GET | `/api/assets/{asset_id}/findings`| Findings for a specific asset |
 
 Full API docs available at `http://localhost/docs`
 

@@ -4,7 +4,8 @@ Scans Router — QuantumShield API
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
+from pydantic import BaseModel
 import uuid
 import datetime
 
@@ -19,16 +20,26 @@ from ..celery_app import celery_app
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
+class ScanStartRequest(BaseModel):
+    org_name: str
+    target_assets: List[str]
+    authorized: Optional[bool] = False
+    full_scan: Optional[bool] = True
 
-@router.post("")
+class ScanStartResponse(BaseModel):
+    scan_id: str
+    status: str
+    message: str
+
+@router.post("", response_model=ScanStartResponse, summary="Start a new security scan", description="Initiates a new quantum vulnerability scan for the given organization mapping. Full org scan defaults to true.")
 def start_scan(
-    body: dict,
+    body: ScanStartRequest,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles(UserRole.ADMIN, UserRole.SECURITY_ANALYST, UserRole.SOC_TEAM))
 ):
-    org_name = body.get("org_name", "").strip()
-    target_assets = body.get("target_assets", [])
+    org_name = body.org_name.strip()
+    target_assets = body.target_assets
 
     if not org_name:
         raise HTTPException(status_code=400, detail="org_name is required")
@@ -40,7 +51,7 @@ def start_scan(
         scan_id=scan_id,
         org_name=org_name,
         target_assets=target_assets,
-        authorized=body.get("authorized", False),
+        authorized=body.authorized,
         status=ScanStatus.PENDING,
         created_by=current_user.id,
         started_at=datetime.datetime.utcnow(),
@@ -49,7 +60,7 @@ def start_scan(
     db.commit()
 
     # Dispatch to Celery in the correct queue
-    full_scan = body.get("full_scan", True)
+    full_scan = body.full_scan
     task = celery_app.send_task("app.tasks.scan_tasks.run_full_scan", args=[scan_id, full_scan], queue="scans")
     
     scan.celery_task_id = task.id
@@ -58,7 +69,7 @@ def start_scan(
     return {"scan_id": scan_id, "status": "PENDING", "message": "Scan queued successfully"}
 
 
-@router.get("")
+@router.get("", summary="List all scans", description="Retrieves a list of up to 50 most recent scans and their status.")
 def list_scans(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
@@ -80,7 +91,7 @@ def list_scans(
     return result
 
 
-@router.get("/{scan_id}")
+@router.get("/{scan_id}", summary="Get scan details", description="Retrieves progress, status, and high-level metrics for a specific scan ID.")
 def get_scan(
     scan_id: str,
     db: Session = Depends(get_db),
@@ -120,7 +131,7 @@ def get_scan(
 
 
 # ── GET /scans/{scan_id}/findings — All findings with compliance + remediation
-@router.get("/{scan_id}/findings")
+@router.get("/{scan_id}/findings", summary="Get scan findings", description="Retrieves all discovered vulnerabilities for a given scan, optionally filtered by severity.")
 def get_scan_findings(
     scan_id: str,
     severity: Optional[str] = None,
@@ -197,7 +208,7 @@ def get_scan_findings(
 
 
 # ── GET /scans/{scan_id}/assets
-@router.get("/{scan_id}/assets")
+@router.get("/{scan_id}/assets", summary="Get scan assets", description="Retrieves inventory of all domains, IPs, certificates, and ciphers found in the scan.")
 def get_scan_assets(
     scan_id: str,
     db: Session = Depends(get_db),
@@ -255,7 +266,7 @@ def get_scan_assets(
 
 
 # ── GET /scans/{scan_id}/cbom — CycloneDX CBOM
-@router.get("/{scan_id}/cbom")
+@router.get("/{scan_id}/cbom", summary="Get CycloneDX CBOM", description="Returns the Cryptographic Bill of Materials (CBOM) in CycloneDX format for the specified scan.")
 def get_scan_cbom(
     scan_id: str,
     db: Session = Depends(get_db),
@@ -275,7 +286,7 @@ def get_scan_cbom(
 
 
 # ── DELETE /scans/{scan_id} — Admin only
-@router.delete("/{scan_id}")
+@router.delete("/{scan_id}", summary="Delete Scan Data", description="Permanently removes a scan job and all associated assets, findings, and certificates. (Admin only)")
 def delete_scan(
     scan_id: str,
     db: Session = Depends(get_db),

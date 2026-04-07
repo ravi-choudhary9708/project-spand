@@ -11,8 +11,8 @@ from app.auth.auth import get_current_user
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
-@router.get("")
-@router.get("/stats")
+@router.get("", summary="Get Dashboard Dashboard metrics", description="Returns aggregated statistics on scans, assets, compliance and PQC readiness across the platform.")
+@router.get("/stats", summary="Get Global Dashboard Stats", description="Alias for the main dashboard metrics. Both return the exact same flat dict.")
 async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     # Total scans
     total_scans = db.query(ScanJob).count()

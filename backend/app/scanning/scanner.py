@@ -3,7 +3,7 @@ Scanning Engine - Main orchestrator
 Wraps Nmap, OpenSSL CLI, SSLyze, and Subfinder with a smart fallback to
 Python ssl module for environments where tools are unavailable.
 
-Key improvements:
+
   - Real algorithm & key size extracted via `openssl s_client` + `openssl x509`
   - Real issuer name extracted from certificate
   - TLS scan runs on ALL TLS-capable ports (443, 8443, 465, 587, 993, 995, 990, etc.)
@@ -135,6 +135,7 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
         ["nmap", "-sS", "-p", ports, "--open", "-T4", "--max-retries", "1", target],
         timeout=30
     )
+    print("nmap result:", result)
 
     return _parse_nmap_output(result["stdout"], target)
 
@@ -169,6 +170,7 @@ def _nmap_fallback(target: str) -> Dict[str, Any]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         results = executor.map(_check_port, ports.items())
         open_ports = [r for r in results if r is not None]
+    print("open port:",open_ports)
 
     return {"target": target, "open_ports": open_ports, "raw": ""}
 
@@ -225,6 +227,7 @@ def _get_cert_pem_via_openssl(domain: str, port: int, starttls: Optional[str] = 
         result = run_command(cmd2, timeout=15, input_data="Q\n")
 
     stdout = result["stdout"]
+    print("openssl stdout:",stdout)
     # Extract first certificate PEM block
     match = re.search(r"(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)", stdout, re.DOTALL)
     if match:
@@ -318,7 +321,7 @@ def _parse_openssl_x509(pem: str) -> Dict[str, Any]:
     if san_match:
         sans_raw = san_match.group(1)
         info["subjectAltName"] = re.findall(r"DNS:([^\s,]+)", sans_raw)
-
+    print("parse open ssl:",info)
     return info
 
 
@@ -818,9 +821,10 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
 
     Falls back to the next method if the current one returns no certificates.
     """
+    # testssl.sh integration
     if is_tool_available("testssl.sh"):
         result = _run_testssl(domain, port, starttls)
-        if result.get("certificates"):
+        if isinstance(result, dict) and result.get("certificates"):
             return result
 
     if _openssl_available():
@@ -886,6 +890,8 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
     except Exception as e:
         logger.error(f"[openssl] TLS scan error for {domain}:{port}: {e}, cascading to python ssl")
         return _python_tls_scan(domain, port)
+
+    print("open ssl tls scan result:",result)
 
     return result
 
@@ -1073,21 +1079,165 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
     return result
 
 
+def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
+    """
+    Parse the list output of testssl.sh into our unified Dict format.
+    Handles the case where data is a list of findings rather than a dict.
+    """
+    result = {
+        "domain": domain,
+        "port": port,
+        "tls_version": None,
+        "cipher_suite": None,
+        "certificates": [],
+        "cipher_suites": [],
+        "supported_versions": [],
+        "error": None,
+        "scan_method": "testssl",
+    }
+
+    if not isinstance(data, list):
+        return result
+
+    # Standard cert fields
+    cert = {
+        "algorithm": "RSA",
+        "key_size": 2048,
+        "subject": {},
+        "issuer": {},
+        "notAfter": "",
+        "serialNumber": "",
+        "subjectAltName": [],
+    }
+    
+    found_cert = False
+    
+    for entry in data:
+        eid = entry.get("id", "")
+        finding = entry.get("finding", "")
+        
+        # Mapping certificate details
+        if eid == "cert_keySize":
+            m = re.search(r"(\d+)", finding)
+            if m: cert["key_size"] = int(m.group(1))
+            found_cert = True
+        elif eid == "cert_algorithm":
+            cert["algorithm"] = finding
+            found_cert = True
+        elif eid == "cert_issuer":
+            cert["issuer"]["commonName"] = finding
+            found_cert = True
+        elif eid == "cert_commonName":
+            cert["subject"]["commonName"] = finding
+            found_cert = True
+        elif eid == "cert_notAfter":
+            cert["notAfter"] = finding
+            found_cert = True
+        elif eid == "cert_serial":
+            cert["serialNumber"] = finding
+            found_cert = True
+            
+        # Mapping Protocols (pick highest)
+        if eid.startswith("protocol_") and "offered" in finding.lower():
+            proto = eid.replace("protocol_", "").replace("_", ".")
+            # Naive "highest" selection: basically if we haven't found one yet or it's TLS 1.3
+            if not result["tls_version"] or "1.3" in proto:
+                result["tls_version"] = proto
+        
+        # In case protocol_ is missing, check if it's in finding text from protocols test
+        if eid in ["SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3"] and "offered" in finding.lower():
+            proto_sh = eid.replace("TLS", "TLS ").replace("SSL", "SSL ")
+            if not result["tls_version"] or "1.3" in proto_sh:
+                 result["tls_version"] = proto_sh
+
+        # Mapping Ciphers
+        if eid.startswith("cipher-"):
+            # testssl findings are often: "   ECDH 256   AES         256      TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+            # We want the RFC name at the end (e.g. TLS_...)
+            cname = finding.strip()
+            # If it's multi-column, try to take the last part that looks like a cipher name
+            parts = cname.split()
+            if parts:
+                # Look for something starting with TLS_ or containing _WITH_
+                for p in reversed(parts):
+                    if p.startswith("TLS_") or "_WITH_" in p or "-" in p:
+                        cname = p
+                        break
+            
+            if cname:
+                result["cipher_suites"].append({
+                    "name": cname,
+                    "tls_version": result["tls_version"] or "Unknown",
+                    "key_exchange": _extract_key_exchange(cname),
+                    "is_quantum_vulnerable": True, # testssl usually doesn't scan PQC yet
+                    "quantum_risk": 9.0 if "RSA" in cname or "ECDSA" in cname else 5.0,
+                })
+                # Set as primary if not set
+                if not result["cipher_suite"]:
+                    result["cipher_suite"] = cname
+
+    if found_cert:
+        result["certificates"].append(cert)
+        
+    return result
+
+
 def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
-    cmd = ["testssl.sh", "--jsonfile", "/tmp/testssl.json", "--quiet"]
+    # Use a unique filename for this scan to avoid race conditions
+    json_path = f"/tmp/testssl_{int(time.time())}.json"
+    cmd = ["testssl.sh", "--jsonfile", json_path, "--quiet"]
     if starttls:
         cmd.extend(["-t", starttls])
     cmd.append(f"{domain}:{port}")
     
-    run_command(cmd, timeout=180)
+    logger.info(f"[testssl] Running scan for {domain}:{port}...")
+    run_command(cmd, timeout=300)
 
     try:
-        with open("/tmp/testssl.json") as f:
-            return json.load(f)
-    except Exception:
-        if _openssl_available():
-            return _openssl_tls_scan(domain, port, starttls)
-        return _python_tls_scan(domain, port)
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if not content:
+                    logger.warning(f"[testssl] JSON file for {domain} is empty")
+                    raise ValueError("Empty JSON output")
+                
+                try:
+                    raw_data = json.loads(content)
+                except json.JSONDecodeError:
+                    # Fix trailing commas
+                    content = re.sub(r',\s*([\]}])', r'\1', content)
+                    # Fix adjacent arrays typical from testssl multiple tests
+                    content = re.sub(r'\]\s*\[', ',', content)
+                    try:
+                        raw_data = json.loads(content)
+                    except json.JSONDecodeError:
+                        raw_data = []
+                        # Extract objects blindly as last resort
+                        for m in re.finditer(r'\{[^{}]+\}', content):
+                            try:
+                                raw_data.append(json.loads(m.group(0)))
+                            except:
+                                pass
+                
+            # Cleanup
+            try: os.remove(json_path)
+            except: pass
+            
+            return _parse_testssl_json(raw_data, domain, port)
+    except (json.JSONDecodeError, ValueError) as json_err:
+        logger.error(f"[testssl] Malformed JSON for {domain}: {json_err}")
+        # Cleanup on failure
+        if os.path.exists(json_path):
+            try: os.remove(json_path)
+            except: pass
+    except Exception as e:
+        logger.error(f"[testssl] Error reading results for {domain}: {e}")
+        
+    # Fallback if testssl failed or produced invalid data
+    logger.info(f"[testssl] Falling back to OpenSSL/Python for {domain}:{port}")
+    if _openssl_available():
+        return _openssl_tls_scan(domain, port, starttls)
+    return _python_tls_scan(domain, port)
 
 
 # ─────────────────────────────────────────
@@ -1199,15 +1349,27 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
                 result["certificates"].append(cert)
                 seen_serials.add(serial)
 
-        # Collect cipher suites
+        # Collect cipher suites (negotiated + full list if available)
+        seen_ciphers = {cs.get("name") for cs in result["cipher_suites"]}
+        
+        # 1. Add negotiated one if not already there
         if tls_data.get("cipher_suite"):
-            cipher_entry = {
-                "name":         tls_data["cipher_suite"],
-                "tls_version":  tls_data.get("tls_version", ""),
-                "key_exchange": _extract_key_exchange(tls_data["cipher_suite"]),
-                "port":         scan_port,
-            }
-            result["cipher_suites"].append(cipher_entry)
+            cname = tls_data["cipher_suite"]
+            if cname not in seen_ciphers:
+                result["cipher_suites"].append({
+                    "name":         cname,
+                    "tls_version":  tls_data.get("tls_version", ""),
+                    "key_exchange": _extract_key_exchange(cname),
+                    "port":         scan_port,
+                })
+                seen_ciphers.add(cname)
+
+        # 2. Add the full enumerated list (testssl.sh)
+        for cs in tls_data.get("cipher_suites", []):
+            if cs.get("name") not in seen_ciphers:
+                cs["port"] = scan_port
+                result["cipher_suites"].append(cs)
+                seen_ciphers.add(cs.get("name"))
 
     # ───────────────────────────────────────────────
     # SERVER SOFTWARE IDENTIFICATION
@@ -1221,7 +1383,7 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         result["server_software"] = headers.get("server")
         if not result["server_software"] and headers.get("x-powered-by"):
             result["server_software"] = f"Powered by {headers.get('x-powered-by')}"
-
+    print("scan asset:",result)
     return result
 
 

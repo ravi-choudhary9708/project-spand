@@ -16,8 +16,9 @@ RUN apt-get update && apt-get install -y \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
-# Install testssl.sh
-RUN curl -sL https://testssl.sh/testssl.sh -o /usr/local/bin/testssl.sh \
+# Install testssl.sh (full repository)
+RUN git clone --depth 1 https://github.com/drwetter/testssl.sh.git /opt/testssl \
+    && ln -s /opt/testssl/testssl.sh /usr/local/bin/testssl.sh \
     && chmod +x /usr/local/bin/testssl.sh
 
 # Install SSLyze via pip (included in requirements)

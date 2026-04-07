@@ -50,7 +50,7 @@ export default function FindingsPage() {
       ) : filtered.length === 0 ? (
         <div className="card empty-state"><p>✅ No findings for this scan.</p></div>
       ) : (
-        <div className="grid-2">
+        <div className={selected ? 'grid-2' : ''}>
           <div>
             <div style={{ marginBottom: 12, fontSize: 13, color: 'var(--text-muted)' }}>{filtered.length} findings</div>
             <div className="table-wrapper">

@@ -11,7 +11,7 @@ from app.auth.auth import get_current_user
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 
-@router.get("")
+@router.get("", summary="List all Assets", description="Retrieves a paginated and filterable list of all discovered assets across all scans.")
 async def list_assets(
     protocol: Optional[str] = Query(None),
     min_hndl: Optional[float] = Query(None),
@@ -37,7 +37,7 @@ async def list_assets(
     return {"total": total, "assets": [_serialize_asset(a) for a in assets]}
 
 
-@router.get("/{asset_id}")
+@router.get("/{asset_id}", summary="Get Asset Details", description="Retrieves comprehensive details about a specific asset, including certificates, ciphers, and findings.")
 async def get_asset(asset_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     asset = db.query(Asset).filter(Asset.asset_id == asset_id).first()
     if not asset:
@@ -51,7 +51,7 @@ async def get_asset(asset_id: str, db: Session = Depends(get_db), current_user=D
     }
 
 
-@router.get("/{asset_id}/findings")
+@router.get("/{asset_id}/findings", summary="Get Asset Findings", description="Retrieves only the vulnerability findings associated with a specific asset.")
 async def get_asset_findings(asset_id: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     asset = db.query(Asset).filter(Asset.asset_id == asset_id).first()
     if not asset:

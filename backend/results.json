@@ -1,0 +1,68 @@
+{
+  "openssl": {
+    "domain": "api.fast.com",
+    "port": 443,
+    "tls_version": null,
+    "cipher_suite": null,
+    "certificates": [
+      {
+        "algorithm": "ECDSA",
+        "key_size": 256,
+        "subject": {
+          "countryName": "US",
+          "stateOrProvinceName": "California",
+          "localityName": "Los Gatos",
+          "organizationName": "Netflix",
+          "commonName": "api.fast.com"
+        },
+        "issuer": {
+          "countryName": "US",
+          "organizationName": "DigiCert Inc",
+          "commonName": "DigiCert Global G3 TLS ECC SHA384 2020 CA1"
+        },
+        "notAfter": "Feb 18 21:35:55 2027 GMT",
+        "serialNumber": "0947335e3e706a353b53fa5e4b15c063",
+        "subjectAltName": [
+          "api.fast.com"
+        ]
+      }
+    ],
+    "cipher_suites": [],
+    "supported_versions": [],
+    "error": null,
+    "scan_method": "openssl_cli"
+  },
+  "python": {
+    "domain": "api.fast.com",
+    "port": 443,
+    "tls_version": "TLSv1.3",
+    "cipher_suite": "TLS_AES_256_GCM_SHA384",
+    "certificates": [
+      {
+        "algorithm": "ECDSA",
+        "key_size": 384,
+        "subject": {
+          "countryName": "US",
+          "stateOrProvinceName": "California",
+          "localityName": "Los Gatos",
+          "organizationName": "Netflix",
+          "commonName": "api.fast.com"
+        },
+        "issuer": {
+          "countryName": "US",
+          "organizationName": "DigiCert Inc",
+          "commonName": "DigiCert Global G3 TLS ECC SHA384 2020 CA1"
+        },
+        "notAfter": "Feb 18 21:35:55 2027 GMT",
+        "serialNumber": "0947335E3E706A353B53FA5E4B15C063",
+        "subjectAltName": [
+          "api.fast.com"
+        ]
+      }
+    ],
+    "cipher_suites": [],
+    "supported_versions": [],
+    "error": null,
+    "scan_method": "python_ssl_inferred"
+  }
+}
