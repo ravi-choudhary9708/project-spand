@@ -426,6 +426,164 @@ def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optiona
 
 
 # ─────────────────────────────────────────
+# SSLYZE — Full Cipher Suite Enumeration
+# ─────────────────────────────────────────
+
+def _sslyze_available() -> bool:
+    """Check if SSLyze can be imported."""
+    try:
+        import sslyze  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _sslyze_cipher_enum(
+    domain: str,
+    port: int = 443,
+    starttls: Optional[str] = None,
+    ip_address: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Use SSLyze's Python API to enumerate ALL cipher suites accepted by the
+    server across every TLS version (SSL 2.0 → TLS 1.3).
+
+    Args:
+        domain:     Hostname (used as SNI even if ip_address is given)
+        port:       TLS port
+        starttls:   STARTTLS protocol name (smtp, imap, pop3, ftp) or None
+        ip_address: If set, connect to this IP but use `domain` as SNI
+                    (used for CDN/WAF bypass scans)
+
+    Returns:
+        List of cipher suite dicts:
+        [{"name": ..., "tls_version": ..., "key_exchange": ..., "port": ...}, ...]
+        Empty list on any failure (graceful degradation).
+    """
+    try:
+        from sslyze import (
+            Scanner,
+            ServerScanRequest,
+            ServerNetworkLocation,
+            ServerNetworkConfiguration,
+            ScanCommand,
+            ServerScanStatusEnum,
+            ScanCommandAttemptStatusEnum,
+        )
+        from sslyze import ProtocolWithOpportunisticTlsEnum
+    except ImportError:
+        logger.debug("[sslyze] SSLyze not installed, skipping cipher enumeration")
+        return []
+
+    try:
+        # ── Build server location ──
+        location_kwargs = {"hostname": domain, "port": port}
+        if ip_address:
+            location_kwargs["ip_address"] = ip_address
+        server_location = ServerNetworkLocation(**location_kwargs)
+
+        # ── Build network configuration (STARTTLS + SNI override) ──
+        net_config_kwargs = {
+            "tls_server_name_indication": domain,
+            "network_timeout": 10,
+            "network_max_retries": 1,
+        }
+
+        # Map our starttls strings → SSLyze ProtocolWithOpportunisticTlsEnum
+        _STARTTLS_MAP = {
+            "smtp": ProtocolWithOpportunisticTlsEnum.SMTP,
+            "imap": ProtocolWithOpportunisticTlsEnum.IMAP,
+            "pop3": ProtocolWithOpportunisticTlsEnum.POP3,
+            "ftp":  ProtocolWithOpportunisticTlsEnum.FTP,
+        }
+        if starttls and starttls.lower() in _STARTTLS_MAP:
+            net_config_kwargs["tls_opportunistic_encryption"] = _STARTTLS_MAP[starttls.lower()]
+
+        network_config = ServerNetworkConfiguration(**net_config_kwargs)
+
+        # ── Only request cipher suite scan commands (fast) ──
+        cipher_commands = {
+            ScanCommand.SSL_2_0_CIPHER_SUITES,
+            ScanCommand.SSL_3_0_CIPHER_SUITES,
+            ScanCommand.TLS_1_0_CIPHER_SUITES,
+            ScanCommand.TLS_1_1_CIPHER_SUITES,
+            ScanCommand.TLS_1_2_CIPHER_SUITES,
+            ScanCommand.TLS_1_3_CIPHER_SUITES,
+        }
+
+        scan_request = ServerScanRequest(
+            server_location=server_location,
+            network_configuration=network_config,
+            scan_commands=cipher_commands,
+        )
+
+        scanner = Scanner(
+            per_server_concurrent_connections_limit=3,
+            concurrent_server_scans_limit=1,
+        )
+        scanner.queue_scans([scan_request])
+
+        # ── Process results ──
+        all_suites: List[Dict[str, Any]] = []
+
+        # Map SSLyze result attributes → human-readable TLS version strings
+        _CIPHER_RESULT_ATTRS = [
+            ("ssl_2_0_cipher_suites", "SSL 2.0"),
+            ("ssl_3_0_cipher_suites", "SSL 3.0"),
+            ("tls_1_0_cipher_suites", "TLS 1.0"),
+            ("tls_1_1_cipher_suites", "TLS 1.1"),
+            ("tls_1_2_cipher_suites", "TLS 1.2"),
+            ("tls_1_3_cipher_suites", "TLS 1.3"),
+        ]
+
+        for server_result in scanner.get_results():
+            if server_result.scan_status == ServerScanStatusEnum.ERROR_NO_CONNECTIVITY:
+                logger.warning(
+                    f"[sslyze] Could not connect to {domain}:{port}: "
+                    f"{server_result.connectivity_error_trace}"
+                )
+                return []
+
+            scan_result = server_result.scan_result
+            if not scan_result:
+                return []
+
+            for attr_name, tls_ver_label in _CIPHER_RESULT_ATTRS:
+                attempt = getattr(scan_result, attr_name, None)
+                if attempt is None:
+                    continue
+                if attempt.status != ScanCommandAttemptStatusEnum.COMPLETED:
+                    continue
+
+                cipher_result = attempt.result
+                if not cipher_result:
+                    continue
+
+                for accepted in cipher_result.accepted_cipher_suites:
+                    suite = accepted.cipher_suite
+                    cipher_name = suite.name
+                    kex = _extract_key_exchange(cipher_name)
+
+                    all_suites.append({
+                        "name":         cipher_name,
+                        "tls_version":  tls_ver_label,
+                        "key_exchange": kex,
+                        "key_size":     suite.key_size,
+                        "port":         port,
+                    })
+
+        logger.info(
+            f"[sslyze] {domain}:{port} → {len(all_suites)} accepted cipher suites"
+            f"{' (via ' + ip_address + ')' if ip_address else ''}"
+        )
+        return all_suites
+
+    except Exception as e:
+        logger.warning(f"[sslyze] Cipher enumeration failed for {domain}:{port}: {e}")
+        return []
+
+
+# ─────────────────────────────────────────
 # TLS
 # ─────────────────────────────────────────
 
@@ -719,6 +877,20 @@ def _try_bypass_on_port(
                         "key_exchange": _extract_key_exchange(result["cipher_suite"]),
                         "port":         port,
                     })
+
+                # Full cipher enumeration via SSLyze with SNI override (bypass)
+                sslyze_suites = _sslyze_cipher_enum(
+                    domain=sni_domain, port=port,
+                    ip_address=origin_target,
+                )
+                if sslyze_suites:
+                    result["cipher_suites"] = sslyze_suites
+                    result["scan_method"] = "origin_bypass+sslyze"
+                    logger.info(
+                        f"[origin-bypass+sslyze] {sni_domain} via {origin_target}:{port} → "
+                        f"{len(sslyze_suites)} cipher suites enumerated"
+                    )
+
                 return result
 
         except Exception as e:
@@ -912,6 +1084,16 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
                 "key_exchange": _extract_key_exchange(result["cipher_suite"]),
                 "port":         port,
             })
+
+        # ── Step 1b: Full cipher enumeration via SSLyze ──
+        sslyze_suites = _sslyze_cipher_enum(domain, port, starttls)
+        if sslyze_suites:
+            result["cipher_suites"] = sslyze_suites
+            result["scan_method"] = "openssl_cli+sslyze"
+            logger.info(
+                f"[openssl+sslyze] {domain}:{port} → "
+                f"{len(sslyze_suites)} cipher suites enumerated"
+            )
 
         # ── Step 2: Get certificate PEM ──
         pem = _get_cert_pem_via_openssl(domain, port, starttls)
@@ -1136,6 +1318,18 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[pyssl] TLS scan error for {domain}:{port}: {e}")
         result["error"] = str(e)
+
+    # ── Full cipher enumeration via SSLyze ──
+    sslyze_suites = _sslyze_cipher_enum(domain, port)
+    if sslyze_suites:
+        result["cipher_suites"] = sslyze_suites
+        result["scan_method"] = (
+            result.get("scan_method", "python_ssl") + "+sslyze"
+        )
+        logger.info(
+            f"[pyssl+sslyze] {domain}:{port} → "
+            f"{len(sslyze_suites)} cipher suites enumerated"
+        )
 
     return result
 
