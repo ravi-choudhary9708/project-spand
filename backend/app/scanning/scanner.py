@@ -368,9 +368,20 @@ def _curve_to_bits(curve_name: str) -> Optional[int]:
 def _parse_dn(dn_str: str) -> Dict[str, str]:
     """Parse a Distinguished Name string into a dict."""
     result = {}
+    if not dn_str:
+        return result
+
     # Handle both comma-separated and slash-separated DNs
-    parts = re.split(r",\s*(?=[A-Z])", dn_str.strip())
+    # Slash-separated: /C=IN/O=PNB/...
+    # Comma-separated: C=IN, O=PNB, ...
+    if dn_str.startswith("/"):
+        parts = dn_str.strip("/").split("/")
+    else:
+        parts = re.split(r",\s*(?=[A-Z(])", dn_str.strip())
+
     for part in parts:
+        if "=" not in part:
+            continue
         kv = part.strip().split("=", 1)
         if len(kv) == 2:
             key_map = {
@@ -821,11 +832,42 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
 
     Falls back to the next method if the current one returns no certificates.
     """
+    # Quick TCP pre-check to ensure port is actually responsive before running heavy tools
+    try:
+        pre_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        pre_sock.settimeout(1.5)
+        pre_result = pre_sock.connect_ex((domain, port))
+        pre_sock.close()
+        if pre_result != 0:
+            logger.info(f"[tls] Port {port} on {domain} unresponsive during pre-check, skipping.")
+            return {"domain": domain, "port": port, "error": "Port unreachable", "certificates": [], "cipher_suites": [], "scan_method": "skipped"}
+    except Exception as e:
+        logger.info(f"[tls] Pre-check failed for {domain}:{port} -> {e}")
+        return {"domain": domain, "port": port, "error": str(e), "certificates": [], "cipher_suites": [], "scan_method": "skipped"}
+
+    # Limit testssl to specific known TLS ports to avoid wasting time on arbitrary ports
+    ALLOWED_TESTSSL_PORTS = {443, 8443, 465, 993, 995, 990}
+
     # testssl.sh integration
-    if is_tool_available("testssl.sh"):
+    if is_tool_available("testssl.sh") and port in ALLOWED_TESTSSL_PORTS:
         result = _run_testssl(domain, port, starttls)
-        if isinstance(result, dict) and result.get("certificates"):
+        # Only accept testssl result if it found BOTH certs and ciphers.
+        # If it only found one, we might want to try OpenSSL to get the missing pieces.
+        if isinstance(result, dict) and result.get("certificates") and result.get("cipher_suites"):
             return result
+        
+        # If testssl found certs but no ciphers, keep the certs but try to augment
+        if isinstance(result, dict) and result.get("certificates"):
+            logger.info(f"[tls] testssl found certs but no ciphers for {domain}:{port}, trying openssl to augment")
+            fallback = _openssl_tls_scan(domain, port, starttls)
+            if fallback.get("certificates") or fallback.get("cipher_suites"):
+                # Merge: take ciphers from openssl, keep certs from whichever is better
+                if not result.get("cipher_suites") and fallback.get("cipher_suites"):
+                    result["cipher_suites"] = fallback["cipher_suites"]
+                    result["cipher_suite"] = fallback.get("cipher_suite")
+                    result["tls_version"] = fallback.get("tls_version")
+                    result["scan_method"] = f"testssl+{fallback.get('scan_method')}"
+                return result
 
     if _openssl_available():
         result = _openssl_tls_scan(domain, port, starttls)
@@ -834,6 +876,7 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
         logger.info(f"[tls] openssl returned no certs for {domain}:{port}, trying python ssl")
 
     return _python_tls_scan(domain, port)
+
 
 
 def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
@@ -853,6 +896,7 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
         "supported_versions": [],
         "error": None,
         "scan_method": "openssl_cli",
+        "algorithm_source": "openssl_cli",
     }
 
     try:
@@ -860,6 +904,14 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
         cipher_info = _get_negotiated_cipher_via_openssl(domain, port, starttls)
         result["tls_version"] = cipher_info.get("tls_version")
         result["cipher_suite"] = cipher_info.get("cipher_name")
+
+        if result["cipher_suite"]:
+            result["cipher_suites"].append({
+                "name":         result["cipher_suite"],
+                "tls_version":  result["tls_version"] or "",
+                "key_exchange": _extract_key_exchange(result["cipher_suite"]),
+                "port":         port,
+            })
 
         # ── Step 2: Get certificate PEM ──
         pem = _get_cert_pem_via_openssl(domain, port, starttls)
@@ -948,6 +1000,7 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
         "supported_versions": [],
         "error": None,
         "scan_method": "python_ssl",
+        "algorithm_source": "python_ssl",
     }
 
     try:
@@ -968,6 +1021,14 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
                 if cipher:
                     cipher_name = cipher[0]
                     result["cipher_suite"] = cipher_name
+
+                    # Add to singular-negotiated suite list for UI
+                    result["cipher_suites"].append({
+                        "name":         cipher_name,
+                        "tls_version":  result["tls_version"] or "",
+                        "key_exchange": _extract_key_exchange(cipher_name),
+                        "port":         port,
+                    })
 
                 # ── Get DER cert for real algo/key_size via cryptography lib ──
                 der_bytes = ssock.getpeercert(binary_form=True)
@@ -1100,6 +1161,7 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
         "vulnerabilities": [],      # NEW: testssl vulnerability findings
         "error": None,
         "scan_method": "testssl",
+        "algorithm_source": "testssl",
     }
 
     if not isinstance(data, list):
@@ -1282,7 +1344,7 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
 def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
     # Use a unique filename for this scan to avoid race conditions
     json_path = f"/tmp/testssl_{int(time.time())}.json"
-    cmd = ["testssl.sh", "--jsonfile", json_path, "--quiet"]
+    cmd = ["testssl.sh", "--jsonfile", json_path, "--quiet", "-S"]
     if starttls:
         cmd.extend(["--starttls", starttls])  # Fixed: was "-t"
     cmd.append(f"{domain}:{port}")

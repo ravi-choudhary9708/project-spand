@@ -134,7 +134,7 @@ def get_domains_from_ct_logs(domain: str) -> List[Dict[str, Any]]:
 
             for sub in all_names:
                 sub = sub.strip().lower()
-                if not sub or not sub.endswith(domain):
+                if not sub or not (sub == domain or sub.endswith(f".{domain}")):
                     continue
                 if sub.startswith("*."):
                     continue
@@ -340,6 +340,10 @@ def find_origin_targets_from_ct(domain: str) -> List[Dict[str, str]]:
                     continue    # that's the domain itself, skip
                 if san_lower.startswith("*."):
                     continue    # wildcard, skip
+                    
+                # To prevent cross-tenant leakage on shared CDN certs, ensure the SAN is actually a subdomain of our target root
+                if not (san_lower == root or san_lower.endswith(f".{root}")):
+                    continue
 
                 if _looks_like_origin_host(san_lower):
                     seen.add(san_lower)
@@ -472,15 +476,21 @@ def _parse_date_ymd(date_str: str) -> Optional[datetime]:
 
 def _get_root_domain(domain: str) -> str:
     """
-    Derive the root domain for CT log wildcard queries.
-      netbanking.pnb.bank.in → pnb.bank.in   (4-part → last 3)
-      api.example.com        → example.com    (3-part → last 2)
+    Derive the root domain used for CT log lookup.
+    Handles known 2-part suffixes like co.in, bank.in, etc.
     """
     parts = domain.split(".")
-    if len(parts) >= 4:
-        return ".".join(parts[-3:])
-    if len(parts) >= 3:
-        return ".".join(parts[-2:])
+    KNOWN_SUFFIXES = {
+        "co.in", "ac.in", "gov.in", "org.in", "ernet.in", "res.in", "nic.in",
+        "bank.in", "co.uk", "org.uk", "ac.uk", "gov.uk",
+        "com.au", "net.au", "org.au", "edu.au", "gov.au"
+    }
+    if len(parts) > 2:
+        suffix = f"{parts[-2]}.{parts[-1]}"
+        if suffix in KNOWN_SUFFIXES:
+            return ".".join(parts[-3:])
+        else:
+            return ".".join(parts[-2:])
     return domain
 
 

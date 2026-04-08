@@ -70,14 +70,20 @@ def _clean_domain(raw: str) -> str:
 def _get_root_domain(domain: str) -> str:
     """
     Derive the root domain used for CT log lookup.
-      netbanking.pnb.bank.in → pnb.bank.in   (4-part → last 3)
-      api.example.com        → example.com    (3-part → last 2)
+    Handles known 2-part suffixes like co.in, bank.in, etc.
     """
     parts = domain.split(".")
-    if len(parts) >= 4:
-        return ".".join(parts[-3:])    # e.g. pnb.bank.in
-    if len(parts) >= 3:
-        return ".".join(parts[-2:])    # e.g. example.com
+    KNOWN_SUFFIXES = {
+        "co.in", "ac.in", "gov.in", "org.in", "ernet.in", "res.in", "nic.in",
+        "bank.in", "co.uk", "org.uk", "ac.uk", "gov.uk",
+        "com.au", "net.au", "org.au", "edu.au", "gov.au"
+    }
+    if len(parts) > 2:
+        suffix = f"{parts[-2]}.{parts[-1]}"
+        if suffix in KNOWN_SUFFIXES:
+            return ".".join(parts[-3:])
+        else:
+            return ".".join(parts[-2:])
     return domain
 
 
@@ -245,7 +251,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     c_ks   = cert_data.get("key_size")
                     if c_algo and main_algorithm is None:
                         main_algorithm = c_algo
-                        algorithm_source = tls_data.get("algorithm_source", "tls_scan")
+                        algorithm_source = tls_data.get("algorithm_source") or tls_data.get("scan_method", "tls_scan")
                     if c_ks and main_key_size is None:
                         main_key_size = c_ks
                     # Parse expiry from TLS cert

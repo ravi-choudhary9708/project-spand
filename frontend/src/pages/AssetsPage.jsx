@@ -22,11 +22,14 @@ function ScanMethodBadge({ method }) {
   const map = {
     openssl_cli:   { label: 'OpenSSL CLI (real)', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
     python_ssl:    { label: 'Python SSL (real)',  color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    python_ssl_real: { label: 'Python SSL (real)', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    python_ssl_inferred: { label: 'Python SSL (approx)', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
     tls_scan:      { label: 'TLS cipher (real)',  color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
     origin_bypass: { label: 'Origin Bypass (real)', color: '#10b981', bg: 'rgba(16,185,129,0.12)' },
     ct_logs_issuer_inferred: { label: 'CT logs (approx)', color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
     default:       { label: 'Default (no data)', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
     testssl:       { label: 'testssl.sh',  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
+    "testssl+openssl_cli": { label: 'testssl + OpenSSL',  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
   }
   const m = map[method] || { label: method, color: '#94a3b8', bg: 'rgba(148,163,184,0.1)' }
   return (
