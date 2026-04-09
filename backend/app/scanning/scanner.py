@@ -43,6 +43,9 @@ TLS_PORTS = {
     1723: {"proto": "VPN",    "starttls": None},
     500:  {"proto": "VPN",    "starttls": None},
 }
+# Regex to identify IPv4 addresses
+_IPv4_RE = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$")
+
 
 
 def run_command(cmd: List[str], timeout: int = 60, input_data: str = None) -> Dict[str, Any]:
@@ -112,8 +115,10 @@ def _subfinder_fallback(domain: str) -> List[str]:
 def resolve_dns(domain: str) -> List[str]:
     try:
         results = socket.getaddrinfo(domain, None)
-        print("desolved dns:",results)
-        return list(set([r[4][0] for r in results]))
+        ips = list(set([r[4][0] for r in results]))
+        # Prioritize IPv4: sort IPs so colons (IPv6) come last
+        ips.sort(key=lambda x: ":" in x)
+        return ips
     except Exception:
         return []
 
@@ -132,10 +137,15 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
 
     # Fast SYN scan — service version detection and SSL scripts are NOT needed
     # because TLS/cert data is gathered separately via openssl/python ssl.
-    result = run_command(
-        ["nmap", "-sS", "-T4", "--top-ports", "1000", "-n", "-Pn","--open", "--min-rate", "1000",target]
-        
-    )
+    # Detect if target is IPv6
+    is_ipv6 = ":" in target and not target.startswith("[")
+    
+    cmd = ["nmap", "-sS", "-T4", "--top-ports", "1000", "-n", "-Pn", "--open", "--min-rate", "1000"]
+    if is_ipv6:
+        cmd.append("-6")
+    cmd.append(target)
+
+    result = run_command(cmd)
     print("nmap result:", result)
 
     return _parse_nmap_output(result["stdout"], target)
@@ -156,7 +166,9 @@ def _nmap_fallback(target: str) -> Dict[str, Any]:
     def _check_port(port_service):
         port, service = port_service
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            # Determine address family
+            family = socket.AF_INET6 if ":" in target else socket.AF_INET
+            sock = socket.socket(family, socket.SOCK_STREAM)
             sock.settimeout(2)
             result = sock.connect_ex((target, port))
             sock.close()
@@ -1823,7 +1835,7 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -
             # Cleanup
             try: os.remove(json_path)
             except: pass
-
+            print("testssl raw data",raw_data)
             return _parse_testssl_json(raw_data, domain, port)
     except (json.JSONDecodeError, ValueError) as json_err:
         logger.error(f"[testssl] Malformed JSON for {domain}: {json_err}")
