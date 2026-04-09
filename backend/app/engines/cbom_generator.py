@@ -95,6 +95,7 @@ def generate_cbom(scan_job: Dict, assets: List[Dict]) -> Dict[str, Any]:
                 "keySize": cert.get("key_size", 0),
                 "hndlScore": cert.get("hndl_score", 0.0),
                 "isPQC": cert.get("is_pqc", False),
+                "confidence": "approximate" if cert.get("is_approximate") else "verified",
             }
 
         cbom["components"].append(component)

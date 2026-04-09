@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     SCAN_RESULTS_DIR: str = "/app/scan_results"
     MAX_CONCURRENT_SCANS: int = 4
     SCAN_RATE_LIMIT_DELAY: float = 0.5  # seconds between probes
+    CT_CACHE_TTL_HOURS: int = 24  # TTL for CT log redis cache
 
     class Config:
         env_file = ".env"

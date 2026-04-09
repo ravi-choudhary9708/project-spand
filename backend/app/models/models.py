@@ -129,6 +129,7 @@ class Asset(Base):
     service_category = Column(String(50), nullable=True)
     server_software = Column(String(200), nullable=True)
     scan_method = Column(String(50), nullable=True)  # openssl_cli | python_ssl | testssl
+    algorithm_confidence = Column(String(20), default="verified")  # verified | approximate | default
     discovered_at = Column(DateTime, default=datetime.utcnow)
 
     scan_job = relationship("ScanJob", back_populates="assets")
@@ -152,6 +153,7 @@ class Certificate(Base):
     hndl_score = Column(Float, default=0.0)
     expires_at = Column(DateTime, nullable=True)
     is_pqc = Column(Boolean, default=False)
+    is_approximate = Column(Boolean, default=False)  # True if algorithm was inferred from issuer, not from leaf cert
     san_domains = Column(JSON, default=list)
     serial_number = Column(String(255), nullable=True)
     fingerprint = Column(String(255), nullable=True)

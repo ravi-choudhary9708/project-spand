@@ -576,7 +576,8 @@ def get_ips_from_spf(domain: str, _depth: int = 0) -> List[str]:
             for part in txt.split():
                 if part.startswith("ip4:"):
                     ip = part[4:].split("/")[0]  # strip CIDR mask
-                    if not _is_known_cdn_ip(ip):
+                    # Skip network/broadcast addresses (common in SPF subnets like Google's)
+                    if not _is_known_cdn_ip(ip) and not ip.endswith(".0") and not ip.endswith(".255"):
                         ips.append(ip)
                 elif part.startswith("include:") and _depth < 3:
                     sub = part[8:]

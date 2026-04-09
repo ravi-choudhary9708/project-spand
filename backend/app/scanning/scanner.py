@@ -85,7 +85,7 @@ def run_subfinder(domain: str) -> List[str]:
     if result["returncode"] == 0 and result["stdout"]:
         subdomains = [s.strip() for s in result["stdout"].split("\n") if s.strip()]
         return subdomains
-
+    print("subdomains:",subdomains)
     return [domain]
 
 
@@ -112,6 +112,7 @@ def _subfinder_fallback(domain: str) -> List[str]:
 def resolve_dns(domain: str) -> List[str]:
     try:
         results = socket.getaddrinfo(domain, None)
+        print("desolved dns:",results)
         return list(set([r[4][0] for r in results]))
     except Exception:
         return []
@@ -132,8 +133,8 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
     # Fast SYN scan — service version detection and SSL scripts are NOT needed
     # because TLS/cert data is gathered separately via openssl/python ssl.
     result = run_command(
-        ["nmap", "-sS", "-p", ports, "--open", "-T4", "--max-retries", "1", target],
-        timeout=30
+        ["nmap", "-sS", "-T4", "--top-ports", "1000", "-n", "-Pn","--open", "--min-rate", "1000",target]
+        
     )
     print("nmap result:", result)
 
@@ -156,7 +157,7 @@ def _nmap_fallback(target: str) -> Dict[str, Any]:
         port, service = port_service
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1.5)
+            sock.settimeout(2)
             result = sock.connect_ex((target, port))
             sock.close()
             if result == 0:
@@ -195,7 +196,7 @@ def _parse_nmap_output(output: str, target: str) -> Dict[str, Any]:
                     "service": service,
                     "state": "open"
                 })
-
+    print("namp output ports:",open_ports)
     return {"target": target, "open_ports": open_ports, "raw": output[:2000]}
 
 
@@ -583,6 +584,246 @@ def _sslyze_cipher_enum(
         return []
 
 
+def _sslyze_full_scan(
+    domain: str,
+    port: int = 443,
+    starttls: Optional[str] = None,
+    ip_address: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Standalone SSLyze scan: extracts certificates AND enumerates cipher suites.
+    Used as Priority #2 scanner when testssl.sh fails.
+
+    Returns same structure as run_tls_scan() so it drops in cleanly.
+    """
+    result = {
+        "domain": domain,
+        "port": port,
+        "tls_version": None,
+        "cipher_suite": None,
+        "certificates": [],
+        "cipher_suites": [],
+        "supported_versions": [],
+        "error": None,
+        "scan_method": "sslyze",
+        "algorithm_source": "sslyze",
+    }
+
+    try:
+        from sslyze import (
+            Scanner,
+            ServerScanRequest,
+            ServerNetworkLocation,
+            ServerNetworkConfiguration,
+            ScanCommand,
+            ServerScanStatusEnum,
+            ScanCommandAttemptStatusEnum,
+        )
+        from sslyze import ProtocolWithOpportunisticTlsEnum
+    except ImportError:
+        logger.debug("[sslyze] SSLyze not installed, skipping full scan")
+        return result
+
+    try:
+        # ── Build server location ──
+        location_kwargs = {"hostname": domain, "port": port}
+        if ip_address:
+            location_kwargs["ip_address"] = ip_address
+        server_location = ServerNetworkLocation(**location_kwargs)
+
+        # ── Build network configuration ──
+        net_config_kwargs = {
+            "tls_server_name_indication": domain,
+            "network_timeout": 15,
+            "network_max_retries": 2,
+        }
+
+        _STARTTLS_MAP = {
+            "smtp": ProtocolWithOpportunisticTlsEnum.SMTP,
+            "imap": ProtocolWithOpportunisticTlsEnum.IMAP,
+            "pop3": ProtocolWithOpportunisticTlsEnum.POP3,
+            "ftp":  ProtocolWithOpportunisticTlsEnum.FTP,
+        }
+        if starttls and starttls.lower() in _STARTTLS_MAP:
+            net_config_kwargs["tls_opportunistic_encryption"] = _STARTTLS_MAP[starttls.lower()]
+
+        network_config = ServerNetworkConfiguration(**net_config_kwargs)
+
+        # ── Request cert info + ALL cipher suites ──
+        scan_commands = {
+            ScanCommand.CERTIFICATE_INFO,
+            ScanCommand.SSL_2_0_CIPHER_SUITES,
+            ScanCommand.SSL_3_0_CIPHER_SUITES,
+            ScanCommand.TLS_1_0_CIPHER_SUITES,
+            ScanCommand.TLS_1_1_CIPHER_SUITES,
+            ScanCommand.TLS_1_2_CIPHER_SUITES,
+            ScanCommand.TLS_1_3_CIPHER_SUITES,
+        }
+
+        scan_request = ServerScanRequest(
+            server_location=server_location,
+            network_configuration=network_config,
+            scan_commands=scan_commands,
+        )
+
+        scanner = Scanner(
+            per_server_concurrent_connections_limit=3,
+            concurrent_server_scans_limit=1,
+        )
+        scanner.queue_scans([scan_request])
+
+        _CIPHER_RESULT_ATTRS = [
+            ("ssl_2_0_cipher_suites", "SSL 2.0"),
+            ("ssl_3_0_cipher_suites", "SSL 3.0"),
+            ("tls_1_0_cipher_suites", "TLS 1.0"),
+            ("tls_1_1_cipher_suites", "TLS 1.1"),
+            ("tls_1_2_cipher_suites", "TLS 1.2"),
+            ("tls_1_3_cipher_suites", "TLS 1.3"),
+        ]
+
+        for server_result in scanner.get_results():
+            if server_result.scan_status == ServerScanStatusEnum.ERROR_NO_CONNECTIVITY:
+                logger.warning(
+                    f"[sslyze-full] Could not connect to {domain}:{port}: "
+                    f"{server_result.connectivity_error_trace}"
+                )
+                return result
+
+            scan_result = server_result.scan_result
+            if not scan_result:
+                return result
+
+            # ── Extract certificate info ──────────────────────────────
+            cert_attempt = getattr(scan_result, "certificate_info", None)
+            if (
+                cert_attempt
+                and cert_attempt.status == ScanCommandAttemptStatusEnum.COMPLETED
+                and cert_attempt.result
+            ):
+                cert_info_result = cert_attempt.result
+                for deployment in cert_info_result.certificate_deployments:
+                    leaf_cert = deployment.received_certificate_chain[0]
+
+                    # Extract algorithm and key size from the leaf cert
+                    from cryptography.hazmat.primitives.asymmetric import rsa, ec, ed25519, ed448, dsa
+
+                    pub_key = leaf_cert.public_key()
+                    algo = None
+                    key_size = None
+
+                    if isinstance(pub_key, rsa.RSAPublicKey):
+                        algo = "RSA"
+                        key_size = pub_key.key_size
+                    elif isinstance(pub_key, ec.EllipticCurvePublicKey):
+                        algo = "ECDSA"
+                        key_size = pub_key.key_size
+                    elif isinstance(pub_key, ed25519.Ed25519PublicKey):
+                        algo = "Ed25519"
+                        key_size = 256
+                    elif isinstance(pub_key, ed448.Ed448PublicKey):
+                        algo = "Ed448"
+                        key_size = 448
+                    elif isinstance(pub_key, dsa.DSAPublicKey):
+                        algo = "DSA"
+                        key_size = pub_key.key_size
+
+                    # Subject
+                    from cryptography import x509
+                    subject = {}
+                    for attr in leaf_cert.subject:
+                        if attr.oid._name == "commonName":
+                            subject["commonName"] = attr.value
+                        elif attr.oid._name == "organizationName":
+                            subject["organizationName"] = attr.value
+
+                    # Issuer
+                    issuer = {}
+                    for attr in leaf_cert.issuer:
+                        if attr.oid._name == "commonName":
+                            issuer["commonName"] = attr.value
+                        elif attr.oid._name == "organizationName":
+                            issuer["organizationName"] = attr.value
+
+                    # Expiry
+                    not_after = leaf_cert.not_valid_after_utc.strftime("%b %d %H:%M:%S %Y")
+
+                    # Serial
+                    serial = format(leaf_cert.serial_number, "x")
+
+                    # SANs
+                    sans = []
+                    try:
+                        san_ext = leaf_cert.extensions.get_extension_for_class(
+                            x509.SubjectAlternativeName
+                        )
+                        sans = san_ext.value.get_values_for_type(x509.DNSName)
+                    except x509.ExtensionNotFound:
+                        pass
+
+                    result["certificates"].append({
+                        "algorithm":      algo,
+                        "key_size":       key_size,
+                        "subject":        subject,
+                        "issuer":         issuer,
+                        "notAfter":       not_after,
+                        "serialNumber":   serial,
+                        "subjectAltName": sans,
+                    })
+
+                    logger.info(
+                        f"[sslyze-full] {domain}:{port} → algo={algo} key_size={key_size} "
+                        f"issuer={issuer.get('organizationName', 'Unknown')}"
+                    )
+                    break  # Only take first deployment
+
+            # ── Extract cipher suites ─────────────────────────────────
+            for attr_name, tls_ver_label in _CIPHER_RESULT_ATTRS:
+                attempt = getattr(scan_result, attr_name, None)
+                if attempt is None:
+                    continue
+                if attempt.status != ScanCommandAttemptStatusEnum.COMPLETED:
+                    continue
+
+                cipher_result_data = attempt.result
+                if not cipher_result_data:
+                    continue
+
+                for accepted in cipher_result_data.accepted_cipher_suites:
+                    suite = accepted.cipher_suite
+                    cipher_name = suite.name
+                    kex = _extract_key_exchange(cipher_name)
+
+                    result["cipher_suites"].append({
+                        "name":         cipher_name,
+                        "tls_version":  tls_ver_label,
+                        "key_exchange": kex,
+                        "key_size":     suite.key_size,
+                        "port":         port,
+                    })
+
+                    # Track highest TLS version and first cipher
+                    if not result["tls_version"] or "1.3" in tls_ver_label:
+                        result["tls_version"] = tls_ver_label
+                    if not result["cipher_suite"]:
+                        result["cipher_suite"] = cipher_name
+
+                    result["supported_versions"].append(tls_ver_label)
+
+            # Deduplicate supported_versions
+            result["supported_versions"] = list(set(result["supported_versions"]))
+
+        logger.info(
+            f"[sslyze-full] {domain}:{port} → {len(result['certificates'])} certs, "
+            f"{len(result['cipher_suites'])} cipher suites"
+        )
+
+    except Exception as e:
+        logger.warning(f"[sslyze-full] Full scan failed for {domain}:{port}: {e}", exc_info=True)
+        result["error"] = str(e)
+
+    return result
+
+
 # ─────────────────────────────────────────
 # TLS
 # ─────────────────────────────────────────
@@ -603,7 +844,8 @@ _CDN_FINGERPRINT_HEADERS = {
 }
 _CDN_SERVER_KEYWORDS = (
     "cloudflare", "akamai", "cloudfront", "fastly", 
-    "imperva", "incapsula", "zscaler", "tata", "cdn"
+    "imperva", "incapsula", "zscaler", "tata", "cdn",
+    "google", "gws", "ghs"
 )
 
 
@@ -998,55 +1240,48 @@ def _infer_from_cipher_and_issuer(
 def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
     """
     Attempt TLS scan in priority order:
-      1. testssl.sh  (most comprehensive)
-      2. openssl CLI  (real data: algorithm, key_size, issuer, cipher suite)
-      3. Python ssl module fallback (uses cryptography lib for real algo/key_size)
+      1. testssl.sh   (most comprehensive — certs + full cipher enum + vulns)
+      2. SSLyze       (full cipher enum + cert extraction via cryptography lib)
+      3. openssl CLI  (real cert data: algorithm, key_size, issuer, negotiated cipher)
+      4. Python ssl   (last resort fallback)
 
     Falls back to the next method if the current one returns no certificates.
     """
-    # Quick TCP pre-check to ensure port is actually responsive before running heavy tools
-    try:
-        pre_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        pre_sock.settimeout(1.5)
-        pre_result = pre_sock.connect_ex((domain, port))
-        pre_sock.close()
-        if pre_result != 0:
-            logger.info(f"[tls] Port {port} on {domain} unresponsive during pre-check, skipping.")
-            return {"domain": domain, "port": port, "error": "Port unreachable", "certificates": [], "cipher_suites": [], "scan_method": "skipped"}
-    except Exception as e:
-        logger.info(f"[tls] Pre-check failed for {domain}:{port} -> {e}")
-        return {"domain": domain, "port": port, "error": str(e), "certificates": [], "cipher_suites": [], "scan_method": "skipped"}
-
-    # Limit testssl to specific known TLS ports to avoid wasting time on arbitrary ports
+    # ── Priority 1: testssl.sh ────────────────────────────────────────────────
     ALLOWED_TESTSSL_PORTS = {443, 8443, 465, 993, 995, 990}
 
-    # testssl.sh integration
     if is_tool_available("testssl.sh") and port in ALLOWED_TESTSSL_PORTS:
+        logger.info(f"[tls] Trying testssl.sh for {domain}:{port}")
         result = _run_testssl(domain, port, starttls)
-        # Only accept testssl result if it found BOTH certs and ciphers.
-        # If it only found one, we might want to try OpenSSL to get the missing pieces.
-        if isinstance(result, dict) and result.get("certificates") and result.get("cipher_suites"):
-            return result
-        
-        # If testssl found certs but no ciphers, keep the certs but try to augment
         if isinstance(result, dict) and result.get("certificates"):
-            logger.info(f"[tls] testssl found certs but no ciphers for {domain}:{port}, trying openssl to augment")
-            fallback = _openssl_tls_scan(domain, port, starttls)
-            if fallback.get("certificates") or fallback.get("cipher_suites"):
-                # Merge: take ciphers from openssl, keep certs from whichever is better
-                if not result.get("cipher_suites") and fallback.get("cipher_suites"):
-                    result["cipher_suites"] = fallback["cipher_suites"]
-                    result["cipher_suite"] = fallback.get("cipher_suite")
-                    result["tls_version"] = fallback.get("tls_version")
-                    result["scan_method"] = f"testssl+{fallback.get('scan_method')}"
-                return result
+            # If testssl got certs but no ciphers, augment with sslyze
+            if not result.get("cipher_suites"):
+                logger.info(f"[tls] testssl found certs but no ciphers for {domain}:{port}, augmenting with sslyze")
+                sslyze_suites = _sslyze_cipher_enum(domain, port, starttls)
+                if sslyze_suites:
+                    result["cipher_suites"] = sslyze_suites
+                    result["scan_method"] = "testssl+sslyze"
+            return result
+        logger.info(f"[tls] testssl returned no certs for {domain}:{port}, falling back")
 
+    # ── Priority 2: SSLyze (standalone — certs + full cipher enum) ────────────
+    if _sslyze_available():
+        logger.info(f"[tls] Trying SSLyze for {domain}:{port}")
+        sslyze_result = _sslyze_full_scan(domain, port, starttls)
+        if sslyze_result.get("certificates"):
+            return sslyze_result
+        logger.info(f"[tls] SSLyze returned no certs for {domain}:{port}, falling back")
+
+    # ── Priority 3: OpenSSL CLI ───────────────────────────────────────────────
     if _openssl_available():
+        logger.info(f"[tls] Trying openssl CLI for {domain}:{port}")
         result = _openssl_tls_scan(domain, port, starttls)
         if result.get("certificates"):
             return result
-        logger.info(f"[tls] openssl returned no certs for {domain}:{port}, trying python ssl")
+        logger.info(f"[tls] openssl returned no certs for {domain}:{port}, falling back")
 
+    # ── Priority 4: Python ssl (last resort) ──────────────────────────────────
+    logger.info(f"[tls] Using python ssl fallback for {domain}:{port}")
     return _python_tls_scan(domain, port)
 
 
@@ -1673,6 +1908,13 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         for port_num in sorted(port_numbers):
             if port_num not in TLS_PORTS:
                 tls_scan_targets.append((port_num, None))
+
+    # ── Force 443 Fallback ──────────────────────────────────────────
+    # If target is a domain and no TLS ports were found, force a 443 attempt.
+    # This ensures PATH A is attempted even if nmap is blocked/throttled.
+    if not tls_scan_targets and "." in domain and not _IPv4_RE.match(domain):
+        logger.info(f"[scan] No open TLS ports found for {domain}, forcing 443 probe fallback")
+        tls_scan_targets.append((443, None))
 
     for scan_port, starttls in tls_scan_targets:
 

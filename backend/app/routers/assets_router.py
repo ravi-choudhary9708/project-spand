@@ -82,6 +82,7 @@ def _serialize_asset(a: Asset, include_first_cert: bool = False) -> dict:
         "algorithm": None,
         "key_size":   None,
         "issuer":     None,
+        "algorithm_confidence": a.algorithm_confidence,
     }
     # Attach first-cert data to every list item for the table columns
     if a.certificates:
@@ -102,6 +103,7 @@ def _serialize_cert(c: Certificate) -> dict:
         "hndl_score": c.hndl_score,
         "expires_at": c.expires_at.isoformat() if c.expires_at else None,
         "is_pqc": c.is_pqc,
+        "is_approximate": c.is_approximate,
     }
 
 

@@ -18,11 +18,14 @@ EXACT FLOW:
 import uuid
 import re
 import os
+import json
+import redis
 from datetime import datetime
 from urllib.parse import urlparse
 from celery import shared_task
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
+from app.config import settings
 from app.models.models import (
     ScanJob, Asset, Certificate, CipherSuite, Finding,
     Remediation, CBOM, ComplianceTag,
@@ -97,10 +100,33 @@ def _build_ct_cache(root_domain: str) -> dict:
     Returns {subdomain_lower: {algorithm, key_size, expires_at, issuer, source}}.
 
     Strategy:
-      1. Try the local crt.txt file first (instant, offline)
-      2. Fall back to live crt.sh API
-    This way the file acts as a warm cache and the API is only hit when needed.
+      1. Check Redis cache first (TTL-based caching to avoid redundant API calls).
+      2. If miss, try local crt.txt file (offline prepopulated cache).
+      3. If miss, fall back to live crt.sh API.
+      4. Store the result in Redis with 24h TTL.
     """
+    redis_client = None
+    cache_key = f"ct_cache:{root_domain}"
+    try:
+        redis_client = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
+        cached_data = redis_client.get(cache_key)
+        if cached_data:
+            logger.info(f"CT cache (Redis hit): loaded cache for {root_domain}")
+            
+            def _deserialize_dates(d: dict) -> dict:
+                for v in d.values():
+                    for k in ["expires_at", "not_before"]:
+                        if v.get(k):
+                            try:
+                                v[k] = datetime.fromisoformat(v[k])
+                            except ValueError:
+                                pass
+                return d
+            
+            return _deserialize_dates(json.loads(cached_data))
+    except Exception as e:
+        logger.warning(f"Redis cache access failed for CT logs: {e}")
+
     cache: dict = {}
 
     # ── Try local crt.txt first ───────────────────────────────────
@@ -114,17 +140,32 @@ def _build_ct_cache(root_domain: str) -> dict:
             if d and (d == root_domain or d.endswith("." + root_domain)):
                 cache[d] = e
         logger.info(f"CT cache (file): {len(cache)} entries for {root_domain}")
-        if cache:
-            return cache
 
     # ── Fall back to live crt.sh API ─────────────────────────────
-    logger.info(f"CT cache: querying crt.sh API for {root_domain}")
-    entries = get_domains_from_ct_logs(root_domain)
-    for e in entries:
-        d = e.get("domain", "").lower()
-        if d:
-            cache[d] = e
-    logger.info(f"CT cache (API): {len(cache)} entries for {root_domain}")
+    if not cache:
+        logger.info(f"CT cache: querying crt.sh API for {root_domain}")
+        entries = get_domains_from_ct_logs(root_domain)
+        for e in entries:
+            d = e.get("domain", "").lower()
+            if d:
+                cache[d] = e
+        logger.info(f"CT cache (API): {len(cache)} entries for {root_domain}")
+
+    # Save to Redis
+    if redis_client and cache:
+        try:
+            class DateTimeEncoder(json.JSONEncoder):
+                def default(self, obj):
+                    if isinstance(obj, datetime):
+                        return obj.isoformat()
+                    return super().default(obj)
+            
+            ttl_seconds = getattr(settings, "CT_CACHE_TTL_HOURS", 24) * 3600
+            redis_client.setex(cache_key, ttl_seconds, json.dumps(cache, cls=DateTimeEncoder))
+            logger.info(f"CT cache: Saved to Redis with TTL {ttl_seconds}s for {root_domain}")
+        except Exception as e:
+            logger.warning(f"Failed to save CT logs to Redis: {e}")
+
     return cache
 
 
@@ -188,18 +229,9 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
             all_domains = clean_targets
             logger.info(f"Targeted scan (full_scan=False): {len(all_domains)} domains")
 
-        # ── STEP 3: Build CT log cache ONCE per root domain ───────
-        # crt.sh gives us algorithm + expiry for ALL subdomains —
-        # even CDN-protected and firewall-blocked ones.
-        self.update_state(state="PROGRESS", meta={"progress": 8, "step": "Building CT log cache"})
+        # ── STEP 3: Initialize CT cache (lazy-loaded in Path B2) ───
         ct_cache: dict = {}
         seen_roots: set = set()
-        for target in clean_targets:
-            root = _get_root_domain(target)
-            if root not in seen_roots:
-                seen_roots.add(root)
-                ct_cache.update(_build_ct_cache(root))
-        logger.info(f"CT cache total: {len(ct_cache)} entries across {len(seen_roots)} root domain(s)")
 
         # ── STEP 4: Scan each domain ──────────────────────────────
         total = len(all_domains)
@@ -240,6 +272,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                 main_key_size    = None
                 expires_at       = None
                 algorithm_source = "default"
+                algorithm_confidence = "verified"
 
                 # PATH A — check TLS scan result
                 tls_algo     = tls_data.get("algorithm")       # set by openssl_tls_scan
@@ -358,12 +391,20 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                         # ── PATH B2: CT cache → expiry stored, algo is issuer-inferred ──
                         # NOTE: This is an APPROXIMATION. The algo comes from the CA's
                         # name, not the leaf cert. Use only when bypass also failed.
+                        
+                        # Lazy load CT cache for this root if not already done
+                        root = _get_root_domain(domain)
+                        if root not in seen_roots:
+                            ct_cache.update(_build_ct_cache(root))
+                            seen_roots.add(root)
+                            
                         ct_entry = ct_cache.get(domain.lower())
                         if ct_entry:
                             main_algorithm   = ct_entry.get("algorithm", "RSA")
                             main_key_size    = ct_entry.get("key_size", 2048)
                             expires_at       = expires_at or ct_entry.get("expires_at")
                             algorithm_source = "ct_logs_issuer_inferred"
+                            algorithm_confidence = "approximate"
                             logger.info(
                                 f"{domain}: [PATH B2] CT issuer-inferred → {main_algorithm}-{main_key_size} "
                                 f"(approx) expires={expires_at} issuer={ct_entry.get('issuer', 'Unknown')}"
@@ -373,6 +414,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                             main_algorithm   = "RSA"
                             main_key_size    = 2048
                             algorithm_source = "default"
+                            algorithm_confidence = "default"
                             logger.info(f"{domain}: [PATH C] default → RSA-2048 (no TLS + no CT data)")
 
                 # ── Final values ──────────────────────────────────
@@ -419,11 +461,19 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     is_pqc=is_pqc_ready(final_algo),
                     pqc_readiness=_map_pqc_readiness(pqc_label),
                     scan_method=algorithm_source,  # track which path was used
+                    algorithm_confidence=algorithm_confidence,
                 )
                 db.add(asset)
                 db.flush()
 
                 # 4d: Save Certificate(s) ──────────────────────────
+                # Ensure CT cache is loaded if we need it for synthetic cert
+                root = _get_root_domain(domain)
+                if root not in seen_roots and not scan_data.get("certificates"):
+                     # Only load if we don't have real certs and might need B2 fallback
+                     ct_cache.update(_build_ct_cache(root))
+                     seen_roots.add(root)
+
                 ct_entry_for_cert = ct_cache.get(domain.lower(), {})
 
                 if scan_data.get("certificates"):
@@ -447,6 +497,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                             hndl_score = asset_hndl,
                             expires_at = expires_at,
                             is_pqc     = is_pqc_ready(final_algo),
+                            is_approximate = False,
                         ))
                 elif ct_entry_for_cert:
                     # PATH B: synthesise a certificate record from CT log data
@@ -461,6 +512,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                         hndl_score = asset_hndl,
                         expires_at = expires_at,
                         is_pqc     = is_pqc_ready(final_algo),
+                        is_approximate = True,
                     ))
                 else:
                     # PATH C: minimal record — mark as default
@@ -475,6 +527,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                         hndl_score = asset_hndl,
                         expires_at = None,
                         is_pqc     = is_pqc_ready(final_algo),
+                        is_approximate = True,
                     ))
 
                 # 4e: Save Cipher Suites ───────────────────────────
