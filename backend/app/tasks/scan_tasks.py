@@ -290,7 +290,7 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
                     # Parse expiry from TLS cert
                     not_after_str = cert_data.get("notAfter", "")
                     if not_after_str and expires_at is None:
-                        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
+                        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
                             try:
                                 expires_at = datetime.strptime(not_after_str.strip(), fmt)
                                 break

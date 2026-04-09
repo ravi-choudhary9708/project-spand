@@ -1587,7 +1587,8 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
         "certificates": [],
         "cipher_suites": [],
         "supported_versions": [],
-        "vulnerabilities": [],      # NEW: testssl vulnerability findings
+        "vulnerabilities": [],
+        "server_banner": None,       # extracted from banner_server
         "error": None,
         "scan_method": "testssl",
         "algorithm_source": "testssl",
@@ -1672,8 +1673,16 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
             cert["subject"]["commonName"] = finding.strip()
             found_cert = True
 
-        elif base_eid == "cert_issuer":
-            cert["issuer"]["commonName"] = finding.strip()
+        elif base_eid in ("cert_issuer", "cert_caIssuers"):
+            # testssl uses cert_caIssuers (e.g. "Sectigo ... CA DV R36 (Sectigo Limited from GB)")
+            raw_issuer = finding.strip()
+            # Extract org name from parentheses if present: "CA Name (OrgName from Country)"
+            org_match = re.search(r'\(([^)]+?)\s+from\s+\w+\)', raw_issuer)
+            if org_match:
+                cert["issuer"]["organizationName"] = org_match.group(1)
+            # Use the part before parentheses as CN
+            cn_part = re.sub(r'\s*\([^)]*\)\s*$', '', raw_issuer).strip()
+            cert["issuer"]["commonName"] = cn_part if cn_part else raw_issuer
             found_cert = True
 
         elif base_eid == "cert_notAfter":
@@ -1735,6 +1744,10 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
                 })
                 if not result["cipher_suite"]:
                     result["cipher_suite"] = cname
+
+        # ── Server banner ─────────────────────────────────────────
+        elif eid == "banner_server":
+            result["server_banner"] = finding.strip()
 
         # ── Vulnerability findings ───────────────────────────────
         else:
@@ -1967,18 +1980,33 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
                 seen_ciphers.add(cs.get("name"))
 
     # ───────────────────────────────────────────────
-    # SERVER SOFTWARE IDENTIFICATION
+    # SERVER SOFTWARE & CDN from TLS scan data
     # ───────────────────────────────────────────────
-    # Try to get 'Server' header from anyone we reached
-    headers = _http_probe_cdn_headers(target_ip, 443, domain)
-    if not headers:
-        headers = _http_probe_cdn_headers(target_ip, 80, domain)
-    
-    if headers:
-        result["server_software"] = headers.get("server")
-        if not result["server_software"] and headers.get("x-powered-by"):
-            result["server_software"] = f"Powered by {headers.get('x-powered-by')}"
-    print("scan asset:",result)
+    # First: extract server banner from testssl if available
+    if primary_tls_data and primary_tls_data.get("server_banner"):
+        result["server_software"] = primary_tls_data["server_banner"]
+
+    # Second: try HTTP probe (by domain first, then IP)
+    if not result["server_software"]:
+        headers = _http_probe_cdn_headers(domain, 443, domain)
+        if not headers:
+            headers = _http_probe_cdn_headers(target_ip, 443, domain)
+        if not headers:
+            headers = _http_probe_cdn_headers(domain, 80, domain)
+
+        if headers:
+            result["server_software"] = headers.get("server")
+            if not result["server_software"] and headers.get("x-powered-by"):
+                result["server_software"] = f"Powered by {headers.get('x-powered-by')}"
+
+            # Also update CDN detection from these headers if not already detected
+            if not result["is_cdn"]:
+                for h in headers:
+                    if h.lower() in _CDN_FINGERPRINT_HEADERS:
+                        result["is_cdn"] = True
+                        result["cdn_provider"] = _map_header_to_cdn(h, headers[h])
+                        break
+
     return result
 
 

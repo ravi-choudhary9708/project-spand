@@ -1,0 +1,11 @@
+ALPN_HTTP2 => h2
+certs_countServer <hostCert#1> => 3
+certs_countServer <hostCert#2> => 3
+HTTP_status_code => 200 OK ('/')
+HTTP_clock_skew => -2 (± 1.5) seconds from localtime
+HTTP_headerTime => 1775760328
+banner_server => github.com
+cookie_httponly => 3/3 at '/' marked as HttpOnly
+X-Frame-Options => deny
+X-Content-Type-Options => nosniff
+X-XSS-Protection => 0
