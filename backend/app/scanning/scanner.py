@@ -1711,9 +1711,9 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
             found_cert = True
 
         # ── Protocol offerings ───────────────────────────────────
-        elif eid in ("SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3"):
-            if "offered" in finding.lower():
-                proto_name = eid.replace("TLS1_3", "TLS 1.3").replace("TLS1_2", "TLS 1.2") \
+        elif eid in ("SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3", "protocol_TLS1_3"):
+            if "offered" in finding.lower() or eid == "protocol_TLS1_3":
+                proto_name = eid.replace("protocol_", "").replace("TLS1_3", "TLS 1.3").replace("TLS1_2", "TLS 1.2") \
                                  .replace("TLS1_1", "TLS 1.1").replace("TLS1", "TLS 1.0") \
                                  .replace("SSLv3", "SSL 3.0").replace("SSLv2", "SSL 2.0")
                 result["supported_versions"].append(proto_name)
@@ -1737,23 +1737,34 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
                 result["tls_version"] = proto
 
         # ── Cipher suites ────────────────────────────────────────
-        elif eid.startswith("cipher-") or eid.startswith("cipherorder_"):
+        # testssl uses ids like 'cipher-SSLv3', 'cipherorder_TLS1_2', 
+        # or sometimes just the protocol name 'TLS1_3' for findings.
+        elif eid.startswith("cipher-") or eid.startswith("cipherorder_") or \
+             (eid in ("SSLv2", "SSLv3", "TLS1", "TLS1_1", "TLS1_2", "TLS1_3", "protocol_TLS1_3") and \
+              any(k in finding for k in ("TLS_", "_WITH_", "0x"))):
+            
             cname = finding.strip()
             parts = cname.split()
             if parts:
                 for p in reversed(parts):
-                    if p.startswith("TLS_") or "_WITH_" in p or ("-" in p and len(p) > 8):
+                    if p.startswith("TLS_") or "_WITH_" in p or ("-" in p and len(p) > 8) or p.startswith("0x"):
                         cname = p
                         break
+                else:
+                    if len(parts) == 1 and parts[0].lower() not in ("offered", "available", "vulnerable"):
+                        cname = parts[0]
+                    else:
+                        cname = None
 
             if cname and len(cname) > 3:
-                result["cipher_suites"].append({
-                    "name": cname,
-                    "tls_version": result["tls_version"] or "Unknown",
-                    "key_exchange": _extract_key_exchange(cname),
-                    "is_quantum_vulnerable": True,
-                    "quantum_risk": 9.0 if "RSA" in cname else 5.0,
-                })
+                if not any(cs["name"] == cname for cs in result["cipher_suites"]):
+                    result["cipher_suites"].append({
+                        "name": cname,
+                        "tls_version": result["tls_version"] or "Unknown",
+                        "key_exchange": _extract_key_exchange(cname),
+                        "is_quantum_vulnerable": True,
+                        "quantum_risk": 9.0 if "RSA" in cname else 5.0,
+                    })
                 if not result["cipher_suite"]:
                     result["cipher_suite"] = cname
 
@@ -1924,9 +1935,17 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
     # Determine which open ports to attempt TLS on
     tls_scan_targets = []
 
+    # Standard non-TLS ports to skip to avoid wasting time
+    SKIP_TLS_PORTS = {80, 22}
+
     for port_num in sorted(port_numbers):
+        # 1. If it's a known TLS port, definitely scan it
         if port_num in TLS_PORTS:
             tls_scan_targets.append((port_num, TLS_PORTS[port_num].get("starttls")))
+        # 2. If it's NOT a known non-TLS port, TRY it anyway (Thorough Mode)
+        elif port_num not in SKIP_TLS_PORTS:
+            logger.info(f"[scan] Port {port_num} found open, attempting thorough TLS scan")
+            tls_scan_targets.append((port_num, None))
 
     # For UNKNOWN protocol — also try any open port not in TLS_PORTS
     if result["protocol"] == "UNKNOWN":
