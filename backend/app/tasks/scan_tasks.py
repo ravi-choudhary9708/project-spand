@@ -21,8 +21,11 @@ import os
 import json
 import redis
 from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
 from urllib.parse import urlparse
 from celery import shared_task
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.config import settings
@@ -170,6 +173,279 @@ def _build_ct_cache(root_domain: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────
+# PARALLEL SCAN WORKERS
+# ─────────────────────────────────────────────────────────────────
+
+def _gather_target_profile(domain: str, root_domain: str, ct_cache_map: dict, root_info_map: dict) -> dict:
+    """
+    Fast concurrent gathering of 'passive' information for a single domain.
+    Used pre-buffered root information for ViewDNS and SPF to avoid redundancy.
+    """
+    logger.info(f"[profile] Gathering data for {domain}")
+    
+    # 1. CT Log metadata (already buffered in ct_cache_map for the root)
+    ct_entry = ct_cache_map.get(domain.lower(), {})
+    
+    # 2. Origin Bypass Candidates
+    origin_targets = []
+    
+    # Add root-level candidates (SPF and Historical IPs)
+    root_info = root_info_map.get(root_domain, {})
+    origin_targets.extend(root_info.get("origin_targets", []))
+    
+    try:
+        # Mine SANs (Note: this involves a crt.sh API call for this specific domain)
+        origin_targets.extend(find_origin_targets_from_ct(domain))
+        
+        # Mine SPF specifically for this subdomain if different (rare but possible)
+        # However, we mostly trust the root SPF gathered in the pre-flight
+    except Exception as e:
+        logger.debug(f"[profile] Gathering error for {domain}: {e}")
+
+    return {
+        "domain":         domain,
+        "root_domain":    root_domain,
+        "ct_entry":       ct_entry,
+        "origin_targets": origin_targets,
+    }
+
+
+def _scan_single_domain(domain: str, scan_id: str, profile: dict) -> Optional[dict]:
+    """
+    Isolated worker function for parallel analysis of one domain.
+    Handles Path A/B/C logic and persistence.
+    """
+    db = SessionLocal()
+    try:
+        logger.info(f"[worker] Starting analysis for {domain}")
+        
+        # ── 1. Heavy Analysis: Network scan ─────────────────────────
+        # (nmap + TLS via openssl / python ssl)
+        scan_data    = scan_asset(domain)
+        protocol     = scan_data.get("protocol", "UNKNOWN")
+        tls_data     = scan_data.get("tls_data", {})
+        open_ports   = scan_data.get("open_ports", [])
+        resolved_ips = scan_data.get("resolved_ips", [])
+        is_cdn       = scan_data.get("is_cdn", False)
+
+        # ── 2. Three-path algorithm decision ────────────────────────
+        main_algorithm   = None
+        main_key_size    = None
+        expires_at       = None
+        algorithm_source = "default"
+        algorithm_confidence = "verified"
+
+        # PATH A — verify TLS scan results
+        for cert_data in scan_data.get("certificates", []):
+            c_algo = cert_data.get("algorithm")
+            if c_algo and main_algorithm is None:
+                main_algorithm = c_algo
+                main_key_size  = cert_data.get("key_size")
+                algorithm_source = tls_data.get("algorithm_source") or tls_data.get("scan_method", "tls_scan")
+                # Parse expiry
+                not_after_str = cert_data.get("notAfter", "")
+                if not_after_str:
+                    for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y", "%Y-%m-%d %H:%M:%S"):
+                        try:
+                            expires_at = datetime.strptime(not_after_str.strip(), fmt)
+                            break
+                        except: continue
+
+        # PATH B1 — Origin Bypass (using pre-gathered profile)
+        if not main_algorithm:
+            origin_targets = profile.get("origin_targets", [])
+            _B1_MAX_TARGETS = 3
+            for target in origin_targets[:_B1_MAX_TARGETS]:
+                t_value = target.get("value")
+                if not t_value: continue
+                
+                bypass_data = scan_via_origin_bypass(domain, t_value)
+                bypass_certs = bypass_data.get("certificates", [])
+                if bypass_certs:
+                    c = bypass_certs[0]
+                    main_algorithm = c.get("algorithm")
+                    main_key_size  = c.get("key_size") or 2048
+                    algorithm_source = f"origin_bypass_{target.get('source', 'ct_san')}"
+                    
+                    not_after_str = c.get("notAfter", "")
+                    if not_after_str:
+                        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
+                            try:
+                                expires_at = datetime.strptime(not_after_str.strip(), fmt)
+                                break
+                            except: continue
+                    
+                    scan_data["certificates"] = bypass_certs
+                    scan_data["cipher_suites"] = bypass_data.get("cipher_suites", [])
+                    logger.info(f"[worker] {domain}: PATH B1 SUCCESS via {t_value}")
+                    break
+
+        # PATH B2 — CT Fallback (using pre-gathered profile)
+        if not main_algorithm:
+            ct_entry = profile.get("ct_entry", {})
+            if ct_entry:
+                main_algorithm   = ct_entry.get("algorithm", "RSA")
+                main_key_size    = ct_entry.get("key_size", 2048)
+                expires_at       = ct_entry.get("expires_at")
+                algorithm_source = "ct_logs_issuer_inferred"
+                algorithm_confidence = "approximate"
+                logger.info(f"[worker] {domain}: PATH B2 (CT Fallback)")
+            else:
+                # PATH C — Default
+                main_algorithm   = "RSA"
+                main_key_size    = 2048
+                algorithm_source = "default"
+                algorithm_confidence = "default"
+                logger.info(f"[worker] {domain}: PATH C (Default)")
+
+        # ── 3. Finalization: Scoring and Persistence ────────────────
+        final_algo     = main_algorithm or "RSA"
+        final_key_size = main_key_size  or 2048
+        sensitivity    = _get_data_sensitivity(domain)
+        
+        # Protocol deduction
+        if protocol == "UNKNOWN" and scan_data.get("cipher_suites"):
+            _p = scan_data["cipher_suites"][0].get("port")
+            _protocol_map = {443: "HTTPS", 8443: "HTTPS", 8080: "HTTPS", 465: "SMTP", 
+                             587: "SMTP", 25: "SMTP", 993: "IMAP", 143: "IMAP", 
+                             995: "POP3", 110: "POP3", 21: "FTPS", 990: "FTPS"}
+            protocol = _protocol_map.get(_p, "UNKNOWN")
+
+        # Scoring
+        tls_version_str = tls_data.get("tls_version")
+        asset_hndl_result = calculate_hndl_score(final_algo, final_key_size, sensitivity, expires_at, tls_version_str)
+        asset_hndl = asset_hndl_result[0] if isinstance(asset_hndl_result, tuple) else asset_hndl_result
+        hndl_breakdown = asset_hndl_result[1] if isinstance(asset_hndl_result, tuple) else {}
+        pqc_label  = get_pqc_readiness_label(asset_hndl)
+
+        # Save Asset
+        asset = Asset(
+            asset_id=str(uuid.uuid4()),
+            scan_id=scan_id,
+            domain=domain,
+            resolved_ips=resolved_ips,
+            protocol=_map_protocol(protocol),
+            is_cdn=is_cdn,
+            cdn_provider=scan_data.get("cdn_provider"),
+            server_software=scan_data.get("server_software"),
+            open_ports=open_ports,
+            service_category=_get_service_category(protocol, domain, scan_data.get("server_software")),
+            hndl_score=asset_hndl,
+            hndl_breakdown=hndl_breakdown,
+            is_pqc=is_pqc_ready(final_algo),
+            pqc_readiness=_map_pqc_readiness(pqc_label),
+            scan_method=algorithm_source,
+            algorithm_confidence=algorithm_confidence,
+        )
+        db.add(asset)
+        db.flush()
+
+        # Save Certificate(s)
+        if scan_data.get("certificates"):
+            for cert_data in scan_data["certificates"]:
+                subj = cert_data.get("subject", {})
+                iss  = cert_data.get("issuer", {})
+                db.add(Certificate(
+                    cert_id    = str(uuid.uuid4()),
+                    asset_id   = asset.asset_id,
+                    domain     = domain,
+                    subject    = (subj.get("commonName", domain) if isinstance(subj, dict) else str(subj) or domain),
+                    issuer     = (iss.get("organizationName") or iss.get("commonName") or "Unknown" if isinstance(iss, dict) else str(iss) or "Unknown"),
+                    algorithm  = final_algo,
+                    key_size   = final_key_size,
+                    hndl_score = asset_hndl,
+                    expires_at = expires_at,
+                    is_pqc     = is_pqc_ready(final_algo),
+                    is_approximate = False,
+                ))
+        elif profile.get("ct_entry"):
+            # Synthetic cert from CT logs
+            ct_entry = profile["ct_entry"]
+            db.add(Certificate(
+                cert_id    = str(uuid.uuid4()),
+                asset_id   = asset.asset_id,
+                domain     = domain,
+                subject    = domain,
+                issuer     = ct_entry.get("issuer", "Unknown"),
+                algorithm  = final_algo,
+                key_size   = final_key_size,
+                hndl_score = asset_hndl,
+                expires_at = expires_at,
+                is_pqc     = is_pqc_ready(final_algo),
+                is_approximate = True,
+            ))
+        else:
+            # Default minimum
+            db.add(Certificate(
+                cert_id    = str(uuid.uuid4()),
+                asset_id   = asset.asset_id,
+                domain     = domain,
+                subject    = domain,
+                issuer     = "Unknown (default)",
+                algorithm  = final_algo,
+                key_size   = final_key_size,
+                hndl_score = asset_hndl,
+                expires_at = None,
+                is_pqc     = is_pqc_ready(final_algo),
+                is_approximate = True,
+            ))
+
+        # Save Cipher Suites
+        for suite_data in scan_data.get("cipher_suites", []):
+            kex  = suite_data.get("key_exchange", "RSA")
+            tver = suite_data.get("tls_version", "TLS 1.2")
+            qr   = get_algorithm_vulnerability_score(kex)
+            db.add(CipherSuite(
+                suite_id              = str(uuid.uuid4()),
+                asset_id              = asset.asset_id,
+                name                  = suite_data.get("name", ""),
+                tls_version           = tver,
+                key_exchange          = kex,
+                quantum_risk          = qr,
+                is_quantum_vulnerable = is_quantum_vulnerable(kex),
+                strength              = ("weak" if qr > 6.0 else "medium" if qr > 3.0 else "strong"),
+            ))
+            if tver in ("TLS 1.0", "TLS 1.1", "SSL 3.0", "SSL 2.0", "SSLv3", "SSLv2"):
+                _create_finding(db, asset.asset_id, FindingType.OUTDATED_TLS, "HIGH", 7.5, "CWE-326", f"Outdated Protocol: {tver}", f"Service supports {tver} which is deprecated.", tver)
+
+        # Vulnerability findings (e.g. from testssl)
+        testssl_vulns = tls_data.get("vulnerabilities", [])
+        for vuln in testssl_vulns:
+            v_type = FindingType.OUTDATED_TLS if vuln.get("type") == "OUTDATED_TLS" else FindingType.OTHER
+            f = _create_finding(db, asset.asset_id, v_type, vuln.get("severity", "MEDIUM"), asset_hndl, vuln.get("cwe", "CWE-310"), vuln.get("title", "Vuln"), vuln.get("description", ""), final_algo)
+            if f:
+                for v in map_finding_to_compliance(final_algo, tls_data.get("tls_version", "")):
+                    db.add(ComplianceTag(tag_id=str(uuid.uuid4()), finding_id=f.finding_id, framework=v["framework"], control_ref=v["control_ref"], status="NON_COMPLIANT", description=v["description"]))
+
+        # Quantum Risk Finding
+        if is_quantum_vulnerable(final_algo):
+            finding = _create_finding(db, asset.asset_id, FindingType.QUANTUM_VULNERABLE_ALGO, "CRITICAL" if asset_hndl >= 7.5 else "HIGH", asset_hndl, "CWE-327", f"Quantum-Vulnerable Algorithm: {final_algo}", f"{final_algo} is breakable by Shor's algorithm.", final_algo)
+            if finding:
+                playbook = get_remediation_playbook("QUANTUM_VULNERABLE_ALGO", final_algo)
+                db.add(Remediation(playbook_id=str(uuid.uuid4()), finding_id=finding.finding_id, priority=playbook.get("priority", 5), steps=playbook.get("steps", []), pqc_alternative=playbook.get("pqc_alternative", "")))
+                for v in map_finding_to_compliance(final_algo, tls_data.get("tls_version", "")):
+                    db.add(ComplianceTag(tag_id=str(uuid.uuid4()), finding_id=finding.finding_id, framework=v["framework"], control_ref=v["control_ref"], status="NON_COMPLIANT", description=v["description"]))
+
+        db.commit()
+        logger.info(f"[worker] Finished analysis for {domain}")
+        return {
+            "domain":           domain,
+            "asset_id":         asset.asset_id,
+            "hndl_score":       asset_hndl,
+            "algorithm":        final_algo,
+            "key_size":         final_key_size,
+            "algorithm_source": algorithm_source,
+            "protocol":         protocol,
+        }
+    except Exception as e:
+        logger.error(f"[worker] Analysis failed for {domain}: {e}", exc_info=True)
+        db.rollback()
+        return None
+    finally:
+        db.close()
+
+
+# ─────────────────────────────────────────────────────────────────
 # MAIN CELERY TASK
 # ─────────────────────────────────────────────────────────────────
 
@@ -229,460 +505,96 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
             all_domains = clean_targets
             logger.info(f"Targeted scan (full_scan=False): {len(all_domains)} domains")
 
-        # ── STEP 3: Initialize CT cache (lazy-loaded in Path B2) ───
-        ct_cache: dict = {}
+        # ── STEP 3: Root-Level Info Gathering (Parallel) ──────────
+        ct_cache_map: dict = {}
+        root_info_map: dict = {}
         seen_roots: set = set()
+        for d in all_domains:
+            seen_roots.add(_get_root_domain(d))
+            
+        self.update_state(state="PROGRESS", meta={"progress": 10, "step": f"Gathering root domain intelligence for {len(seen_roots)} root(s)"})
+        
+        def _get_root_intel(root):
+            # 3a. CT Log metadata
+            intel = {"ct": _build_ct_cache(root), "origin_targets": []}
+            # 3b. SPF Mining (Root level)
+            spf_ips = get_ips_from_spf(root)
+            for ip in spf_ips:
+                intel["origin_targets"].append({"type": "ip", "value": ip, "cert_domain": root, "source": "spf"})
+            # 3c. Historical IPs (ViewDNS)
+            hist_ips = get_historical_ips_viewdns(root)
+            for ip in hist_ips:
+                if not _is_known_cdn_ip(ip):
+                    intel["origin_targets"].append({"type": "ip", "value": ip, "cert_domain": root, "source": "passive_dns"})
+            return root, intel
 
-        # ── STEP 4: Scan each domain ──────────────────────────────
+        with ThreadPoolExecutor(max_workers=5) as root_executor:
+            root_futures = [root_executor.submit(_get_root_intel, r) for r in seen_roots]
+            for f in as_completed(root_futures):
+                r, intel = f.result()
+                ct_cache_map.update(intel["ct"])
+                root_info_map[r] = {"origin_targets": intel["origin_targets"]}
+
+        # ── STEP 4: Parallel Subdomain Profiling ──────────────────
+        self.update_state(state="PROGRESS", meta={"progress": 15, "step": "Expanding target profiles (Parallel)"})
+        target_profiles = {}
+        with ThreadPoolExecutor(max_workers=15) as gather_executor:
+            gather_futures = {
+                gather_executor.submit(_gather_target_profile, domain, _get_root_domain(domain), ct_cache_map, root_info_map): domain
+                for domain in all_domains
+            }
+            for future in as_completed(gather_futures):
+                domain = gather_futures[future]
+                try:
+                    target_profiles[domain] = future.result()
+                except Exception as e:
+                    logger.warning(f"Profiling failed for {domain}: {e}")
+                    target_profiles[domain] = {
+                        "domain": domain, "root_domain": _get_root_domain(domain),
+                        "ct_entry": ct_cache_map.get(domain.lower(), {}), "origin_targets": []
+                    }
+
+        # ── STEP 5: Parallel Analysis (Heavy Scan Stage) ─────────
+        MAX_PARALLEL_DOMAINS = 5  # Moderate to avoid network saturation
         total = len(all_domains)
         processed_assets = []
-
-        for i, domain in enumerate(all_domains):
-
-            # Close and recreate db session to prevent cross-domain pollution/corruption if rollback hits
-            db.close()
-            db = SessionLocal()
-            scan_job = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
-
-            progress = int(10 + (i / max(total, 1)) * 78)
-            self.update_state(state="PROGRESS", meta={
-                "progress": progress,
-                "step":     f"Scanning {domain} ({i+1}/{total})"
-            })
-            if scan_job:
-                scan_job.progress = progress
-                db.commit()
-
-            try:
-                # 4a: Network scan (nmap + TLS via openssl / python ssl)
-                scan_data    = scan_asset(domain)
-                protocol     = scan_data.get("protocol", "UNKNOWN")
-                tls_data     = scan_data.get("tls_data", {})
-                open_ports   = scan_data.get("open_ports", [])
-                resolved_ips = scan_data.get("resolved_ips", [])
-                is_cdn       = scan_data.get("is_cdn", False)
-
-                # 4b: Three-path algorithm decision ──────────────────
-                #
-                # PATH A: TLS handshake succeeded → openssl gave us the real algo
-                # PATH B: TLS blocked             → use CT log cache (passive recon)
-                # PATH C: No data at all          → conservative RSA-2048 default
-                #
-                main_algorithm   = None
-                main_key_size    = None
-                expires_at       = None
-                algorithm_source = "default"
-                algorithm_confidence = "verified"
-
-                # PATH A — check TLS scan result
-                tls_algo     = tls_data.get("algorithm")       # set by openssl_tls_scan
-                tls_key_size = tls_data.get("key_size")
-
-                # Also scan certificates list for algo/key_size
-                for cert_data in scan_data.get("certificates", []):
-                    c_algo = cert_data.get("algorithm")
-                    c_ks   = cert_data.get("key_size")
-                    if c_algo and main_algorithm is None:
-                        main_algorithm = c_algo
-                        algorithm_source = tls_data.get("algorithm_source") or tls_data.get("scan_method", "tls_scan")
-                    if c_ks and main_key_size is None:
-                        main_key_size = c_ks
-                    # Parse expiry from TLS cert
-                    not_after_str = cert_data.get("notAfter", "")
-                    if not_after_str and expires_at is None:
-                        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y", "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
-                            try:
-                                expires_at = datetime.strptime(not_after_str.strip(), fmt)
-                                break
-                            except Exception:
-                                continue
-
-                if tls_algo and main_algorithm is None:
-                    main_algorithm   = tls_algo
-                    main_key_size    = tls_key_size or main_key_size
-                    algorithm_source = tls_data.get("scan_method", "tls_scan")
-
-                if main_algorithm:
-                    logger.info(f"{domain}: [PATH A] TLS direct → {main_algorithm}-{main_key_size} [{algorithm_source}]")
-
-                else:
-                    # ── PATH B1: CT SANs → origin IP bypass → REAL leaf cert algo ──────
-                    # crt.sh may list an origin IP or internal host in the cert SANs.
-                    # Connecting to that IP with SNI=domain bypasses the WAF/CDN
-                    # and returns the ACTUAL leaf certificate.
-                    bypass_done = False
-                    try:
-                        origin_targets = find_origin_targets_from_ct(domain)
-
-                        # Fix 7a: Add SPF-mined IPs (data: REAL)
-                        spf_ips = get_ips_from_spf(domain)
-                        for ip in spf_ips:
-                            origin_targets.append({
-                                "type": "ip", "value": ip,
-                                "cert_domain": domain, "source": "spf",
-                            })
-
-                        # Fix 7b: Add historical DNS IPs (data: APPROX)
-                        hist_ips = get_historical_ips_viewdns(_get_root_domain(domain))
-                        for ip in hist_ips:
-                            if not _is_known_cdn_ip(ip):
-                                origin_targets.append({
-                                    "type": "ip", "value": ip,
-                                    "cert_domain": domain, "source": "passive_dns",
-                                })
-
-                        # Limit origin targets to avoid excessive scanning
-                        import time as _time
-                        _b1_start = _time.time()
-                        _B1_TIME_BUDGET = 90   # seconds for ALL bypass attempts
-                        _B1_MAX_TARGETS = 3     # try at most 3 origin IPs
-
-                        for idx, target in enumerate(origin_targets[:_B1_MAX_TARGETS]):
-                            # Enforce time budget
-                            if _time.time() - _b1_start > _B1_TIME_BUDGET:
-                                logger.info(f"{domain}: [PATH B1] time budget exhausted, stopping bypass")
-                                break
-
-                            t_value = target.get("value", "")
-                            if not t_value:
-                                continue
-                            t_source = target.get("source", "ct_san")
-                            logger.info(
-                                f"{domain}: [PATH B1] trying origin bypass via "
-                                f"{target['type']}={t_value} (source={t_source})"
-                            )
-                            bypass_data = scan_via_origin_bypass(
-                                sni_domain=domain,
-                                origin_target=t_value,
-                                # Fix 5: omit port — multi-port probing via BYPASS_PORTS
-                            )
-                            bypass_certs = bypass_data.get("certificates", [])
-                            if bypass_certs:
-                                c = bypass_certs[0]
-                                b_algo = c.get("algorithm")
-                                b_ks   = c.get("key_size")
-                                if b_algo:
-                                    main_algorithm   = b_algo
-                                    main_key_size    = b_ks or 2048
-                                    algorithm_source = f"origin_bypass_{t_source}"
-                                    # Parse expiry from bypass cert
-                                    not_after_str = c.get("notAfter", "")
-                                    if not_after_str and expires_at is None:
-                                        for fmt in ("%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y"):
-                                            try:
-                                                expires_at = datetime.strptime(not_after_str.strip(), fmt)
-                                                break
-                                            except Exception:
-                                                continue
-                                    # Also pull into scan_data so cert records are saved
-                                    scan_data["certificates"] = bypass_certs
-                                    scan_data["cipher_suites"] = bypass_data.get("cipher_suites", [])
-                                    bypass_done = True
-                                    logger.info(
-                                        f"{domain}: [PATH B1] ✓ origin bypass succeeded → "
-                                        f"{main_algorithm}-{main_key_size} via {t_value} "
-                                        f"(source={t_source}, port={bypass_data.get('port', '?')})"
-                                    )
-                                    break
-                    except Exception as e:
-                        logger.debug(f"{domain}: PATH B1 error: {e}")
-
-                    if not bypass_done:
-                        # ── PATH B2: CT cache → expiry stored, algo is issuer-inferred ──
-                        # NOTE: This is an APPROXIMATION. The algo comes from the CA's
-                        # name, not the leaf cert. Use only when bypass also failed.
-                        
-                        # Lazy load CT cache for this root if not already done
-                        root = _get_root_domain(domain)
-                        if root not in seen_roots:
-                            ct_cache.update(_build_ct_cache(root))
-                            seen_roots.add(root)
-                            
-                        ct_entry = ct_cache.get(domain.lower())
-                        if ct_entry:
-                            main_algorithm   = ct_entry.get("algorithm", "RSA")
-                            main_key_size    = ct_entry.get("key_size", 2048)
-                            expires_at       = expires_at or ct_entry.get("expires_at")
-                            algorithm_source = "ct_logs_issuer_inferred"
-                            algorithm_confidence = "approximate"
-                            logger.info(
-                                f"{domain}: [PATH B2] CT issuer-inferred → {main_algorithm}-{main_key_size} "
-                                f"(approx) expires={expires_at} issuer={ct_entry.get('issuer', 'Unknown')}"
-                            )
-                        else:
-                            # ── PATH C: nothing → conservative default ──────────────────
-                            main_algorithm   = "RSA"
-                            main_key_size    = 2048
-                            algorithm_source = "default"
-                            algorithm_confidence = "default"
-                            logger.info(f"{domain}: [PATH C] default → RSA-2048 (no TLS + no CT data)")
-
-                # ── Final values ──────────────────────────────────
-                final_algo     = main_algorithm or "RSA"
-                final_key_size = main_key_size  or 2048
-                sensitivity    = _get_data_sensitivity(domain)
-
-                # Fix for protocol UNKNOWN: If TLS/Bypass cipher suites exist, deduce protocol from port
-                if protocol == "UNKNOWN":
-                    if scan_data.get("cipher_suites"):
-                        _p = scan_data["cipher_suites"][0].get("port")
-                        if _p in [443, 8443, 8080]: protocol = "HTTPS"
-                        elif _p in [465, 587, 25]: protocol = "SMTP"
-                        elif _p in [993, 143]: protocol = "IMAP"
-                        elif _p in [995, 110]: protocol = "POP3"
-                        elif _p in [21, 990]: protocol = "FTPS"
-
-                # Extract TLS version for HNDL scoring
-                tls_version_str = tls_data.get("tls_version") or None
-
-                # Unpack tuple returned by calculate_hndl_score
-                asset_hndl_result = calculate_hndl_score(
-                    final_algo, final_key_size, sensitivity, expires_at, tls_version_str
-                )
-                asset_hndl = asset_hndl_result[0] if isinstance(asset_hndl_result, tuple) else asset_hndl_result
-                hndl_breakdown = asset_hndl_result[1] if isinstance(asset_hndl_result, tuple) else {}
-
-                pqc_label  = get_pqc_readiness_label(asset_hndl)
-
-                # 4c: Save Asset ───────────────────────────────────
-                asset = Asset(
-                    asset_id=str(uuid.uuid4()),
-                    scan_id=scan_id,
-                    domain=domain,
-                    resolved_ips=resolved_ips,
-                    protocol=_map_protocol(protocol),
-                    is_cdn=is_cdn,
-                    cdn_provider=scan_data.get("cdn_provider"),
-                    server_software=scan_data.get("server_software"),
-                    open_ports=open_ports,
-                    service_category=_get_service_category(protocol, domain, scan_data.get("server_software")),
-                    hndl_score=asset_hndl,
-                    hndl_breakdown=hndl_breakdown,
-                    is_pqc=is_pqc_ready(final_algo),
-                    pqc_readiness=_map_pqc_readiness(pqc_label),
-                    scan_method=algorithm_source,  # track which path was used
-                    algorithm_confidence=algorithm_confidence,
-                )
-                db.add(asset)
-                db.flush()
-
-                # 4d: Save Certificate(s) ──────────────────────────
-                # Ensure CT cache is loaded if we need it for synthetic cert
-                root = _get_root_domain(domain)
-                if root not in seen_roots and not scan_data.get("certificates"):
-                     # Only load if we don't have real certs and might need B2 fallback
-                     ct_cache.update(_build_ct_cache(root))
-                     seen_roots.add(root)
-
-                ct_entry_for_cert = ct_cache.get(domain.lower(), {})
-
-                if scan_data.get("certificates"):
-                    for cert_data in scan_data["certificates"]:
-                        subj = cert_data.get("subject", {})
-                        iss  = cert_data.get("issuer", {})
-                        db.add(Certificate(
-                            cert_id    = str(uuid.uuid4()),
-                            asset_id   = asset.asset_id,
-                            domain     = domain,
-                            subject    = (
-                                subj.get("commonName", domain)
-                                if isinstance(subj, dict) else str(subj) or domain
-                            ),
-                            issuer     = (
-                                iss.get("organizationName") or iss.get("commonName") or "Unknown"
-                                if isinstance(iss, dict) else str(iss) or "Unknown"
-                            ),
-                            algorithm  = final_algo,
-                            key_size   = final_key_size,
-                            hndl_score = asset_hndl,
-                            expires_at = expires_at,
-                            is_pqc     = is_pqc_ready(final_algo),
-                            is_approximate = False,
-                        ))
-                elif ct_entry_for_cert:
-                    # PATH B: synthesise a certificate record from CT log data
-                    db.add(Certificate(
-                        cert_id    = str(uuid.uuid4()),
-                        asset_id   = asset.asset_id,
-                        domain     = domain,
-                        subject    = domain,
-                        issuer     = ct_entry_for_cert.get("issuer", "Unknown"),
-                        algorithm  = final_algo,
-                        key_size   = final_key_size,
-                        hndl_score = asset_hndl,
-                        expires_at = expires_at,
-                        is_pqc     = is_pqc_ready(final_algo),
-                        is_approximate = True,
-                    ))
-                else:
-                    # PATH C: minimal record — mark as default
-                    db.add(Certificate(
-                        cert_id    = str(uuid.uuid4()),
-                        asset_id   = asset.asset_id,
-                        domain     = domain,
-                        subject    = domain,
-                        issuer     = "Unknown (default)",
-                        algorithm  = final_algo,
-                        key_size   = final_key_size,
-                        hndl_score = asset_hndl,
-                        expires_at = None,
-                        is_pqc     = is_pqc_ready(final_algo),
-                        is_approximate = True,
-                    ))
-
-                # 4e: Save Cipher Suites ───────────────────────────
-                for suite_data in scan_data.get("cipher_suites", []):
-                    kex  = suite_data.get("key_exchange", "RSA")
-                    tver = suite_data.get("tls_version", "TLS 1.2")
-                    # Use algorithm-specific vulnerability score for cipher suites (not 5-factor HNDL)
-                    qr   = get_algorithm_vulnerability_score(kex)
-
-                    db.add(CipherSuite(
-                        suite_id              = str(uuid.uuid4()),
-                        asset_id              = asset.asset_id,
-                        name                  = suite_data.get("name", ""),
-                        tls_version           = tver,
-                        key_exchange          = kex,
-                        quantum_risk          = qr,
-                        is_quantum_vulnerable = is_quantum_vulnerable(kex),
-                        strength              = (
-                            "weak"   if qr > 6.0 else
-                            "medium" if qr > 3.0 else
-                            "strong"
-                        ),
-                    ))
-
-                    if tver in ("TLS 1.0", "TLS 1.1", "SSLv3", "SSLv2"):
-                        _create_finding(
-                            db, asset.asset_id, FindingType.OUTDATED_TLS,
-                            "HIGH", 7.5, "CWE-326",
-                            f"Outdated TLS Version: {tver}",
-                            f"Service supports {tver} which is deprecated and insecure.",
-                            tver,
-                        )
-
-                # 4e2: testssl vulnerability findings ──────────────
-                # If testssl ran, it returns vulnerability entries (BEAST, BREACH, etc.)
-                testssl_vulns = tls_data.get("vulnerabilities", [])
-                for vuln in testssl_vulns:
-                    vuln_type = vuln.get("type", "OTHER")
-                    finding_type = FindingType.OUTDATED_TLS if vuln_type == "OUTDATED_TLS" else FindingType.OTHER
-                    vuln_finding = _create_finding(
-                        db, asset.asset_id,
-                        finding_type,
-                        vuln.get("severity", "MEDIUM"),
-                        asset_hndl,
-                        vuln.get("cwe", "CWE-310"),
-                        vuln.get("title", "Unknown Vulnerability"),
-                        vuln.get("description", "Detected by testssl.sh"),
-                        final_algo,
-                    )
-                    if vuln_finding:
-                        # Add compliance tags for testssl-detected vulns
-                        for v in map_finding_to_compliance(final_algo, tls_data.get("tls_version", "")):
-                            db.add(ComplianceTag(
-                                tag_id      = str(uuid.uuid4()),
-                                finding_id  = vuln_finding.finding_id,
-                                framework   = v["framework"],
-                                control_ref = v["control_ref"],
-                                status      = "NON_COMPLIANT",
-                                description = v["description"],
-                            ))
-
-                # Also check for deprecated protocol findings from cipher suites
-                for suite_data in scan_data.get("cipher_suites", []):
-                    tver = suite_data.get("tls_version", "")
-                    if tver in ("TLS 1.0", "TLS 1.1", "SSL 3.0", "SSL 2.0", "SSLv3", "SSLv2"):
-                        _create_finding(
-                            db, asset.asset_id, FindingType.OUTDATED_TLS,
-                            "HIGH" if "SSL" in tver else "MEDIUM", 7.5, "CWE-326",
-                            f"Deprecated Protocol Supported: {tver}",
-                            f"Service supports {tver} which is deprecated. Migration to TLS 1.2+ is required.",
-                            tver,
-                        )
-
-                # 4f: Quantum-vulnerability finding ────────────────
-                if is_quantum_vulnerable(final_algo):
-
-                    # Human-readable description of how we obtained this algo
-                    source_labels = {
-                        "openssl_cli":                  "OpenSSL CLI — direct TLS certificate inspection (real)",
-                        "python_ssl":                   "Python ssl module — TLS handshake (real)",
-                        "tls_scan":                     "TLS scan — cipher-suite inference (real)",
-                        "origin_bypass":                "CT SAN origin-IP bypass — WAF bypassed, real leaf cert (real)",
-                        "origin_bypass_ct_san":         "CT SAN origin-IP bypass — WAF bypassed, real leaf cert (real)",
-                        "origin_bypass_spf":            "SPF record IP bypass — WAF bypassed via mail-server IP (real)",
-                        "origin_bypass_passive_dns":    "Passive DNS historical IP bypass — WAF bypassed (approx IP, real cert)",
-                        "ct_logs_issuer_inferred":      "CT logs — issuer-name inference (approximate, not leaf cert)",
-                        "default":                      "Conservative RSA-2048 assumption (no data available)",
-                    }
-                    source_desc = source_labels.get(algorithm_source, algorithm_source)
-
-                    # Label approximate / default results clearly in the UI
-                    algo_display = f"{final_algo}-{final_key_size}"
-                    if algorithm_source == "default":
-                        algo_display += " (default — no data)"
-                    elif algorithm_source == "ct_logs_issuer_inferred":
-                        algo_display += " (approx — issuer inferred)"
-
-                    finding = _create_finding(
-                        db, asset.asset_id,
-                        FindingType.QUANTUM_VULNERABLE_ALGO,
-                        "CRITICAL" if asset_hndl >= 7.5 else "HIGH",
-                        asset_hndl, "CWE-327",
-                        f"Quantum-Vulnerable Algorithm: {algo_display}",
-                        (
-                            f"{final_algo} ({final_key_size}-bit) is breakable by Shor's algorithm on a "
-                            f"cryptographically relevant quantum computer. "
-                            f"Algorithm source: {source_desc}."
-                        ),
-                        final_algo,
-                    )
-
-                    if finding:
-                        playbook = get_remediation_playbook("QUANTUM_VULNERABLE_ALGO", final_algo)
-                        db.add(Remediation(
-                            playbook_id    = str(uuid.uuid4()),
-                            finding_id     = finding.finding_id,
-                            priority       = playbook.get("priority", 5),
-                            steps          = playbook.get("steps", []),
-                            pqc_alternative= playbook.get("pqc_alternative", ""),
-                        ))
-                        for v in map_finding_to_compliance(
-                            final_algo,
-                            tls_data.get("tls_version", "")
-                        ):
-                            db.add(ComplianceTag(
-                                tag_id      = str(uuid.uuid4()),
-                                finding_id  = finding.finding_id,
-                                framework   = v["framework"],
-                                control_ref = v["control_ref"],
-                                status      = "NON_COMPLIANT",
-                                description = v["description"],
-                            ))
-
-                db.commit()
-
-                processed_assets.append({
-                    "domain":           domain,
-                    "asset_id":         asset.asset_id,
-                    "hndl_score":       asset_hndl,
-                    "algorithm":        final_algo,
-                    "key_size":         final_key_size,
-                    "algorithm_source": algorithm_source,
-                    "protocol":         protocol,
+        completed_count = 0
+        
+        self.update_state(state="PROGRESS", meta={"progress": 20, "step": f"Starting parallel scan (workers={MAX_PARALLEL_DOMAINS})"})
+        
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_DOMAINS) as scan_executor:
+            scan_futures = {
+                scan_executor.submit(_scan_single_domain, domain, scan_id, target_profiles.get(domain, {})): domain
+                for domain in all_domains
+            }
+            
+            for future in as_completed(scan_futures):
+                domain = scan_futures[future]
+                completed_count += 1
+                try:
+                    result = future.result()
+                    if result:
+                        processed_assets.append(result)
+                except Exception as e:
+                    logger.error(f"Worker crashed for {domain}: {e}")
+                
+                # Update progress
+                progress = int(20 + (completed_count / max(total, 1)) * 68)
+                self.update_state(state="PROGRESS", meta={
+                    "progress": progress,
+                    "step":     f"Parallel Scan: {completed_count}/{total} domains complete"
                 })
-                logger.info(
-                    f"✅ {domain}: HNDL={asset_hndl} {final_algo}-{final_key_size} "
-                    f"[{algorithm_source}] proto={protocol}"
-                )
+                
+                # Periodically update scan_job progress in DB
+                if completed_count % 5 == 0 or completed_count == total:
+                    db.close()
+                    db = SessionLocal()
+                    job = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
+                    if job:
+                        job.progress = progress
+                        db.commit()
 
-            except Exception as e:
-                logger.error(f"Error scanning {domain}: {e}", exc_info=True)
-                db.rollback()
-                continue
-
-        # ── STEP 5: Generate CBOM ─────────────────────────────────
+        # ── STEP 6: Generate CBOM ─────────────────────────────────
         # Refresh session once more for final packaging
         db.close()
         db = SessionLocal()
