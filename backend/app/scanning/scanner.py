@@ -220,13 +220,14 @@ def _openssl_available() -> bool:
     return is_tool_available("openssl")
 
 
-def _get_cert_pem_via_openssl(domain: str, port: int, starttls: Optional[str] = None) -> Optional[str]:
+def _get_cert_pem_via_openssl(domain: str, port: int, starttls: Optional[str] = None, ip_address: Optional[str] = None) -> Optional[str]:
     """
     Use `openssl s_client` to retrieve the PEM certificate from a server.
     Supports STARTTLS for SMTP/IMAP/POP3/FTP.
     Returns the PEM string or None on failure.
     """
-    cmd = ["openssl", "s_client", "-connect", f"{domain}:{port}", "-servername", domain, "-showcerts"]
+    target = f"{ip_address}:{port}" if ip_address else f"{domain}:{port}"
+    cmd = ["openssl", "s_client", "-connect", target, "-servername", domain, "-showcerts"]
     if starttls:
         cmd += ["-starttls", starttls]
 
@@ -234,7 +235,7 @@ def _get_cert_pem_via_openssl(domain: str, port: int, starttls: Optional[str] = 
 
     if result["returncode"] not in (0, 1) or not result["stdout"]:
         # Try without SNI (IP targets, unknown protocol)
-        cmd2 = ["openssl", "s_client", "-connect", f"{domain}:{port}", "-showcerts"]
+        cmd2 = ["openssl", "s_client", "-connect", target, "-showcerts"]
         if starttls:
             cmd2 += ["-starttls", starttls]
         result = run_command(cmd2, timeout=15, input_data="Q\n")
@@ -410,12 +411,13 @@ def _parse_dn(dn_str: str) -> Dict[str, str]:
     return result
 
 
-def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optional[str] = None) -> Dict[str, Any]:
+def _get_negotiated_cipher_via_openssl(domain: str, port: int, starttls: Optional[str] = None, ip_address: Optional[str] = None) -> Dict[str, Any]:
     """
     Use `openssl s_client` to get the negotiated cipher suite name and TLS version.
     Returns dict with keys: cipher_name, tls_version
     """
-    cmd = ["openssl", "s_client", "-connect", f"{domain}:{port}", "-servername", domain]
+    target = f"{ip_address}:{port}" if ip_address else f"{domain}:{port}"
+    cmd = ["openssl", "s_client", "-connect", target, "-servername", domain]
     if starttls:
         cmd += ["-starttls", starttls]
 
@@ -1249,7 +1251,7 @@ def _infer_from_cipher_and_issuer(
     return "RSA", 2048, "default"
 
 
-def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
+def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None, ip_address: Optional[str] = None) -> Dict[str, Any]:
     """
     Attempt TLS scan in priority order:
       1. testssl.sh   (most comprehensive — certs + full cipher enum + vulns)
@@ -1264,12 +1266,12 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
 
     if is_tool_available("testssl.sh") and port in ALLOWED_TESTSSL_PORTS:
         logger.info(f"[tls] Trying testssl.sh for {domain}:{port}")
-        result = _run_testssl(domain, port, starttls)
+        result = _run_testssl(domain, port, starttls, ip_address)
         if isinstance(result, dict) and result.get("certificates"):
             # If testssl got certs but no ciphers, augment with sslyze
-            if not result.get("cipher_suites"):
+            if not result.get("cipher_suites") and _sslyze_available():
                 logger.info(f"[tls] testssl found certs but no ciphers for {domain}:{port}, augmenting with sslyze")
-                sslyze_suites = _sslyze_cipher_enum(domain, port, starttls)
+                sslyze_suites = _sslyze_cipher_enum(domain, port, starttls, ip_address)
                 if sslyze_suites:
                     result["cipher_suites"] = sslyze_suites
                     result["scan_method"] = "testssl+sslyze"
@@ -1279,7 +1281,7 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
     # ── Priority 2: SSLyze (standalone — certs + full cipher enum) ────────────
     if _sslyze_available():
         logger.info(f"[tls] Trying SSLyze for {domain}:{port}")
-        sslyze_result = _sslyze_full_scan(domain, port, starttls)
+        sslyze_result = _sslyze_full_scan(domain, port, starttls, ip_address)
         if sslyze_result.get("certificates"):
             return sslyze_result
         logger.info(f"[tls] SSLyze returned no certs for {domain}:{port}, falling back")
@@ -1287,18 +1289,28 @@ def run_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -
     # ── Priority 3: OpenSSL CLI ───────────────────────────────────────────────
     if _openssl_available():
         logger.info(f"[tls] Trying openssl CLI for {domain}:{port}")
-        result = _openssl_tls_scan(domain, port, starttls)
+        result = _openssl_tls_scan(domain, port, starttls, ip_address)
         if result.get("certificates"):
             return result
         logger.info(f"[tls] openssl returned no certs for {domain}:{port}, falling back")
 
     # ── Priority 4: Python ssl (last resort) ──────────────────────────────────
     logger.info(f"[tls] Using python ssl fallback for {domain}:{port}")
-    return _python_tls_scan(domain, port)
+    result = _python_tls_scan(domain, port, ip_address)
+    
+    # Final check: if we have certs but no ciphers, augment with sslyze
+    if result.get("certificates") and not result.get("cipher_suites") and _sslyze_available():
+        logger.info(f"[tls] final fallback found certs but no ciphers, augmenting with sslyze")
+        sslyze_suites = _sslyze_cipher_enum(domain, port, starttls, ip_address)
+        if sslyze_suites:
+            result["cipher_suites"] = sslyze_suites
+            result["scan_method"] = result.get("scan_method", "") + "+sslyze"
+            
+    return result
 
 
 
-def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
+def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = None, ip_address: Optional[str] = None) -> Dict[str, Any]:
     """
     Full TLS scan using OpenSSL CLI:
       - Retrieves the certificate PEM
@@ -1320,7 +1332,7 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
 
     try:
         # ── Step 1: Get negotiated cipher & TLS version ──
-        cipher_info = _get_negotiated_cipher_via_openssl(domain, port, starttls)
+        cipher_info = _get_negotiated_cipher_via_openssl(domain, port, starttls, ip_address)
         result["tls_version"] = cipher_info.get("tls_version")
         result["cipher_suite"] = cipher_info.get("cipher_name")
 
@@ -1332,18 +1344,8 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
                 "port":         port,
             })
 
-        # ── Step 1b: Full cipher enumeration via SSLyze ──
-        sslyze_suites = _sslyze_cipher_enum(domain, port, starttls)
-        if sslyze_suites:
-            result["cipher_suites"] = sslyze_suites
-            result["scan_method"] = "openssl_cli+sslyze"
-            logger.info(
-                f"[openssl+sslyze] {domain}:{port} → "
-                f"{len(sslyze_suites)} cipher suites enumerated"
-            )
-
         # ── Step 2: Get certificate PEM ──
-        pem = _get_cert_pem_via_openssl(domain, port, starttls)
+        pem = _get_cert_pem_via_openssl(domain, port, starttls, ip_address)
 
         if pem:
             # ── Step 3: Parse certificate details ──
@@ -1366,11 +1368,11 @@ def _openssl_tls_scan(domain: str, port: int = 443, starttls: Optional[str] = No
             })
         else:
             logger.warning(f"[openssl] Could not retrieve PEM for {domain}:{port}, cascading to python ssl")
-            return _python_tls_scan(domain, port)
+            return _python_tls_scan(domain, port, ip_address)
 
     except Exception as e:
         logger.error(f"[openssl] TLS scan error for {domain}:{port}: {e}, cascading to python ssl")
-        return _python_tls_scan(domain, port)
+        return _python_tls_scan(domain, port, ip_address)
 
     print("open ssl tls scan result:",result)
 
@@ -1412,7 +1414,7 @@ def _extract_algo_from_der(der_bytes: bytes) -> Tuple[Optional[str], Optional[in
         return None, None
 
 
-def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
+def _python_tls_scan(domain: str, port: int = 443, ip_address: Optional[str] = None) -> Dict[str, Any]:
     """
     Fallback TLS scan using Python's ssl module.
     Uses getpeercert(binary_form=True) + `cryptography` library to extract
@@ -1565,18 +1567,6 @@ def _python_tls_scan(domain: str, port: int = 443) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[pyssl] TLS scan error for {domain}:{port}: {e}")
         result["error"] = str(e)
-
-    # ── Full cipher enumeration via SSLyze ──
-    sslyze_suites = _sslyze_cipher_enum(domain, port)
-    if sslyze_suites:
-        result["cipher_suites"] = sslyze_suites
-        result["scan_method"] = (
-            result.get("scan_method", "python_ssl") + "+sslyze"
-        )
-        logger.info(
-            f"[pyssl+sslyze] {domain}:{port} → "
-            f"{len(sslyze_suites)} cipher suites enumerated"
-        )
 
     return result
 
@@ -1806,12 +1796,18 @@ def _parse_testssl_json(data: Any, domain: str, port: int) -> Dict[str, Any]:
     return result
 
 
-def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None) -> Dict[str, Any]:
+def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None, ip_address: Optional[str] = None) -> Dict[str, Any]:
     # Use a unique filename for this scan to avoid race conditions
     json_path = f"/tmp/testssl_{int(time.time())}.json"
-    cmd = ["testssl.sh", "--jsonfile", json_path, "--quiet", "-S"]
+    cmd = ["testssl.sh", "--jsonfile", json_path, "--quiet", "--fast", "-S"]
+    if ip_address:
+        cmd.extend(["--ip", ip_address])
+    
+    # Strict timeouts to prevent hanging on bad IPs
+    cmd.extend(["--connect-timeout", "3", "--openssl-timeout", "5"])
+    
     if starttls:
-        cmd.extend(["--starttls", starttls])  # Fixed: was "-t"
+        cmd.extend(["--starttls", starttls])
     cmd.append(f"{domain}:{port}")
 
     logger.info(f"[testssl] Running scan for {domain}:{port}...")
@@ -1970,7 +1966,7 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         logger.info(f"[scan] TLS scanning {domain}:{scan_port} (starttls={starttls})")
 
         try:
-            tls_data = run_tls_scan(domain, scan_port, starttls)
+            tls_data = run_tls_scan(domain, scan_port, starttls, ip_address=target_ip if not result["is_cdn"] else None)
         except Exception as e:
             logger.warning(f"[scan] TLS scan failed on {domain}:{scan_port}: {e}")
             continue
