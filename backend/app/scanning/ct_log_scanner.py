@@ -101,7 +101,8 @@ def get_domains_from_ct_logs(domain: str) -> List[Dict[str, Any]]:
         url = f"https://crt.sh/?q=%.{domain}&output=json"
         logger.info(f"CT API: {url}")
 
-        resp = requests.get(url, timeout=30, headers={
+        # Reduce timeout to 15s to fail-fast if crt.sh is slow
+        resp = requests.get(url, timeout=15, headers={
             "User-Agent": "QuantumShield-Scanner/1.0 (Security Research)"
         })
 
@@ -523,14 +524,11 @@ def get_historical_ips_viewdns(domain: str) -> List[str]:
     """
     try:
         import requests
-    except ImportError:
-        logger.warning("requests not available — ViewDNS lookup skipped")
-        return []
-
-    try:
-        url = f"https://api.viewdns.info/iphistory/?domain={domain}&apikey=free&output=json"
-        resp = requests.get(url, timeout=15, headers={
-            "User-Agent": "QuantumShield-Scanner/1.0 (Security Research)"
+        url = f"https://viewdns.info/iphistory/?domain={domain}"
+        
+        # Add a strict timeout for ViewDNS
+        resp = requests.get(url, timeout=10, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
         })
         data = resp.json()
         ips: List[str] = []
@@ -568,7 +566,12 @@ def get_ips_from_spf(domain: str, _depth: int = 0) -> List[str]:
 
     ips: List[str] = []
     try:
-        answers = dns.resolver.resolve(domain, "TXT")
+        # Create a custom resolver with short timeouts
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5
+        resolver.lifetime = 10
+        
+        answers = resolver.resolve(domain, "TXT")
         for rdata in answers:
             txt = b"".join(rdata.strings).decode("utf-8", errors="ignore")
             if "v=spf1" not in txt.lower():

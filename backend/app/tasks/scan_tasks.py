@@ -531,9 +531,13 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
         with ThreadPoolExecutor(max_workers=5) as root_executor:
             root_futures = [root_executor.submit(_get_root_intel, r) for r in seen_roots]
             for f in as_completed(root_futures):
-                r, intel = f.result()
-                ct_cache_map.update(intel["ct"])
-                root_info_map[r] = {"origin_targets": intel["origin_targets"]}
+                try:
+                    # Apply a 60-second global timeout for any single root intel gathering
+                    r, intel = f.result(timeout=60)
+                    ct_cache_map.update(intel["ct"])
+                    root_info_map[r] = {"origin_targets": intel["origin_targets"]}
+                except Exception as e:
+                    logger.warning(f"Root intel gathering timed out or failed for one or more roots: {e}")
 
         # ── STEP 4: Parallel Subdomain Profiling ──────────────────
         self.update_state(state="PROGRESS", meta={"progress": 15, "step": "Expanding target profiles (Parallel)"})
