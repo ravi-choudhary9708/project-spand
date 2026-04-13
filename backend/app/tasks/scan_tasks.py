@@ -38,6 +38,7 @@ from app.scanning.scanner import scan_asset, run_subfinder, scan_via_origin_bypa
 from app.scanning.ct_log_scanner import (
     get_domains_from_ct_logs, parse_ct_log_file, find_origin_targets_from_ct,
     get_historical_ips_viewdns, get_ips_from_spf, _is_known_cdn_ip,
+    _looks_like_origin_host, _can_resolve, _IPv4_RE
 )
 from app.engines.hndl_engine import (
     calculate_hndl_score, is_quantum_vulnerable,
@@ -187,20 +188,8 @@ def _gather_target_profile(domain: str, root_domain: str, ct_cache_map: dict, ro
     ct_entry = ct_cache_map.get(domain.lower(), {})
     
     # 2. Origin Bypass Candidates
-    origin_targets = []
-    
-    # Add root-level candidates (SPF and Historical IPs)
-    root_info = root_info_map.get(root_domain, {})
-    origin_targets.extend(root_info.get("origin_targets", []))
-    
-    try:
-        # Mine SANs (Note: this involves a crt.sh API call for this specific domain)
-        origin_targets.extend(find_origin_targets_from_ct(domain))
-        
-        # Mine SPF specifically for this subdomain if different (rare but possible)
-        # However, we mostly trust the root SPF gathered in the pre-flight
-    except Exception as e:
-        logger.debug(f"[profile] Gathering error for {domain}: {e}")
+    # Extract bypass targets FROM THE CACHE and pre-flight root info, not from a new API call
+    origin_targets = list(root_info_map.get(root_domain, {}).get("origin_targets", []))
 
     return {
         "domain":         domain,
@@ -255,11 +244,18 @@ def _scan_single_domain(domain: str, scan_id: str, profile: dict) -> Optional[di
         if not main_algorithm:
             origin_targets = profile.get("origin_targets", [])
             _B1_MAX_TARGETS = 3
+            if origin_targets:
+                logger.info(f"[worker] {domain}: Path B1 triggered. Found {len(origin_targets)} bypass candidates.")
+            
             for target in origin_targets[:_B1_MAX_TARGETS]:
                 t_value = target.get("value")
                 if not t_value: continue
                 
-                bypass_data = scan_via_origin_bypass(domain, t_value)
+                logger.info(f"[worker] {domain}: Attempting Path B1 bypass via {t_value} ({target.get('source', 'unknown')})")
+                
+                # Fix: Use nmap-discovered ports for bypass, but skip port 80 (plain HTTP)
+                bypass_ports = [p["port"] for p in open_ports if p["port"] != 80]
+                bypass_data = scan_via_origin_bypass(domain, t_value, ports=bypass_ports if bypass_ports else None)
                 bypass_certs = bypass_data.get("certificates", [])
                 if bypass_certs:
                     c = bypass_certs[0]
@@ -516,16 +512,35 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
         
         def _get_root_intel(root):
             # 3a. CT Log metadata
-            intel = {"ct": _build_ct_cache(root), "origin_targets": []}
-            # 3b. SPF Mining (Root level)
+            ct_cache = _build_ct_cache(root)
+            intel = {"ct": ct_cache, "origin_targets": []}
+            
+            # 3b. Mine CT Cache for origin candidates once per root
+            for val, entry in ct_cache.items():
+                if _IPv4_RE.match(val):
+                    intel["origin_targets"].append({"type": "ip", "value": val, "cert_domain": root, "source": "ct_cache"})
+                elif _looks_like_origin_host(val):
+                    # Only add if it's not the root itself (too generic)
+                    if val != root:
+                        intel["origin_targets"].append({
+                            "type": "host", 
+                            "value": val, 
+                            "cert_domain": root, 
+                            "resolvable": str(_can_resolve(val)), 
+                            "source": "ct_cache"
+                        })
+
+            # 3c. SPF Mining (Root level)
             spf_ips = get_ips_from_spf(root)
             for ip in spf_ips:
                 intel["origin_targets"].append({"type": "ip", "value": ip, "cert_domain": root, "source": "spf"})
-            # 3c. Historical IPs (ViewDNS)
+            
+            # 3d. Historical IPs (ViewDNS)
             hist_ips = get_historical_ips_viewdns(root)
             for ip in hist_ips:
                 if not _is_known_cdn_ip(ip):
                     intel["origin_targets"].append({"type": "ip", "value": ip, "cert_domain": root, "source": "passive_dns"})
+            
             return root, intel
 
         with ThreadPoolExecutor(max_workers=5) as root_executor:

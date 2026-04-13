@@ -843,10 +843,10 @@ def _sslyze_full_scan(
 # ─────────────────────────────────────────
 
 # Ports to try when probing origin IPs for WAF/CDN bypass (kept small for speed)
-BYPASS_PORTS = [443, 8443, 8080]
+BYPASS_PORTS = [443]
 
 # Maximum seconds to spend on ALL bypass attempts per origin target
-_BYPASS_TIME_BUDGET = 60
+_BYPASS_TIME_BUDGET = 25
 
 # CDN fingerprint headers — if ANY of these appear, we're still hitting an edge
 _CDN_FINGERPRINT_HEADERS = {
@@ -877,19 +877,24 @@ def _confirm_bypass_succeeded(
     if response_headers:
         for h in response_headers:
             if h.lower() in _CDN_FINGERPRINT_HEADERS:
-                logger.info(f"[bypass-check] CDN header detected: {h}")
+                logger.info(f"[bypass-confirm] REJECTED: domain uses {h} header (still hitting CDN edge)")
                 return False
         server = str(response_headers.get("server", "")).lower()
         if any(kw in server for kw in _CDN_SERVER_KEYWORDS):
-            logger.info(f"[bypass-check] CDN server detected: {server}")
+            logger.info(f"[bypass-confirm] REJECTED: server banner '{server}' matched CDN keyword")
             return False
 
     # If CT serial is known, confirm we got the same cert
     if ct_serial and cert_serial and ct_serial != cert_serial:
         logger.warning(
-            f"[bypass-check] Cert serial mismatch: got {cert_serial}, CT has {ct_serial}"
+            f"[bypass-confirm] REJECTED: cert serial mismatch. got {cert_serial}, CT expects {ct_serial}"
         )
         return False
+    
+    if response_headers:
+        logger.info("[bypass-confirm] SUCCESS: No CDN fingerprints found in response headers.")
+    else:
+        logger.info("[bypass-confirm] SUCCESS: No headers to check (likely non-HTTP service), assuming bypass.")
 
     return True
 

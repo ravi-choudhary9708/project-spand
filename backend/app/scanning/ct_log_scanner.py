@@ -135,7 +135,10 @@ def get_domains_from_ct_logs(domain: str) -> List[Dict[str, Any]]:
 
             for sub in all_names:
                 sub = sub.strip().lower()
-                if not sub or not (sub == domain or sub.endswith(f".{domain}")):
+                is_ip = bool(_IPv4_RE.match(sub))
+                
+                # Keep subdomains of target root, or direct IP SANs
+                if not sub or not (sub == domain or sub.endswith(f".{domain}") or is_ip):
                     continue
                 if sub.startswith("*."):
                     continue
