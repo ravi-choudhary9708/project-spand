@@ -48,15 +48,16 @@ QuantumShield scans your organization's public-facing domains and tells you:
 
 | Feature | Description |
 |---------|-------------|
-| **Asset Discovery** | Subfinder + CT logs + DNS — discovers all public subdomains automatically |
+| **Asset Discovery** | Subfinder (strictly bounded) — discovers public subdomains only |
+| **Network Classification** | 4-tier model: `public`, `internal`, `cdn_protected`, `restricted` |
 | **HNDL Scoring** | Weighted formula: Algorithm × 0.40 + Key Size × 0.20 + Data Sensitivity × 0.20 + TLS Version × 0.10 + Cert Expiry × 0.10 |
 | **CycloneDX CBOM** | Industry-standard Cryptographic Bill of Materials, exportable as JSON or XML |
 | **Compliance Mapping** | Automatic mapping to NIST FIPS 203/204/205, NIST IR 8547, RBI, CERT-In |
 | **AI Remediation** | Step-by-step migration playbooks for RSA → ML-KEM, ECC → ML-DSA |
-| **Multi-protocol** | HTTPS, SMTP, IMAP, SSH, VPN, FTPS |
+| **Multi-protocol** | HTTPS, SMTP, IMAP, SSH, VPN, FTPS, DNS |
+| **Parallel Engine** | Hybrid architecture: 4 Celery workers × 5 Parallel Threads per scan |
 | **RBAC Dashboard** | 5 user roles — Admin, Analyst, Compliance, SOC, Management |
-| **Continuous Monitoring** | Celery Beat schedules daily rescans automatically |
-| **CDN Detection** | Detects Cloudflare, Akamai, Fastly and attempts origin bypass |
+| **CDN Detection** | Detects Cloudflare, Akamai, Fastly and attempts origin bypass via IP/SPF |
 | **Full Org / Custom URL** | Scan an entire organization or a single specific URL |
 
 ---
@@ -89,11 +90,13 @@ When you click "Start Scan" and enter a domain:
 The target URL is stripped of `http://`, `https://`, paths, and trailing slashes to get a bare domain.
 
 ### Step 2: Subdomain Discovery (Full Org Scan only)
-**Subfinder** discovers all public subdomains using passive sources (APIs, DNS records, CT logs).
-If subfinder is unavailable, a DNS fallback tries common prefixes (`www`, `mail`, `api`, `ftp`, `vpn`, etc.).
+**Subfinder** discovers all public subdomains using various passive sources. To maintain a strict scan perimeter, the scanner **only** targets domains found by subfinder and does not automatically expand the scope using broad CT log scrapes.
 
-### Step 3: CT Log Cache
-Certificate Transparency logs are queried **once** per root domain from [crt.sh](https://crt.sh). A local `crt.txt` file is checked first as a warm cache. This provides algorithm + expiry data for ALL subdomains — even CDN-protected and firewall-blocked ones.
+### Step 3: Intelligence Gathering (DNS, SPF, CT)
+The scanner gathers metadata and origin bypass targets from multiple sources:
+- **CT Log Cache**: Certificate Transparency logs are queried from [crt.sh](https://crt.sh). Hostnames are stripped to maintain scope, but **IP addresses** are extracted as high-confidence bypass targets.
+- **SPF Mining**: Authoritative DNS TXT records are mined for `ip4:` and `include:` directives to find origin IPs.
+- **Passive DNS**: Historical IP resolution data from ViewDNS.info is used to find IPs active before CDN deployment.
 
 ### Step 4: Per-Domain Scanning
 
@@ -106,15 +109,23 @@ Resolves the domain to IP addresses using `socket.getaddrinfo()`.
 Checks if the IP belongs to Cloudflare, Akamai, Fastly, or other CDN providers by reverse-DNS lookup.
 
 #### 4c. Port Scan (Optimized)
-Scans **only TLS-relevant ports** (not all 65535):
+Scans only security-relevant ports:
 ```
-443, 8443, 25, 587, 465, 143, 993, 110, 995, 21, 990, 22, 1194, 1723, 500
+443, 8443 (HTTPS), 25, 587, 465 (SMTP), 143, 993 (IMAP), 110, 995 (POP3), 
+21, 990 (FTPS), 22 (SSH), 53 (DNS), 1194, 1723, 500 (VPN)
 ```
-- **Nmap** (if available): Fast SYN scan (`-sS -T4`) — completes in ~5 seconds
-- **Fallback**: Concurrent socket checks via ThreadPoolExecutor — all 15 ports checked simultaneously in ~1.5 seconds
+- **Nmap**: Fast SYN scan (`-sS -T4`) — completes in ~5 seconds.
+- **Fallback**: Concurrent socket checks via ThreadPoolExecutor — ports checked simultaneously.
 
-#### 4d. Protocol Detection
-Maps open ports to protocols: 443→HTTPS, 22→SSH, 25/587→SMTP, 993→IMAP, 995→POP3, 990→FTPS, 1194/1723/500→VPN.
+#### 4d. Network Classification & Asset Proximity
+The scanner automatically classifies each asset using an IP-based analysis:
+- **`internal`**: IP belongs to RFC 1918/4193 private ranges.
+- **`cdn_protected`**: IP belongs to Cloudflare, Akamai, or Fastly ranges.
+- **`restricted`**: Port scan yielded no response (Firewalled / CDN-only).
+- **`public`**: Standard internet-reachable infrastructure.
+
+> [!IMPORTANT]
+> **Data Leak Detection (CWE-200)**: Assets found resolving to `internal` IPs are automatically flagged with a medium-severity finding, as their presence in public CT logs exposes internal network topology.
 
 #### 4e. TLS Certificate Extraction — Three-Method Cascade
 
@@ -239,6 +250,12 @@ subfinder  nmap  TLS  HNDL  CBOM  Compliance
 PostgreSQL (results)
 Redis (task queue)
 ```
+
+### High-Performance Parallel Execution
+QuantumShield is engineered for enterprise-scale throughput:
+- **Macro-Level Parallelism**: 4 concurrent Celery worker processes (one per organization or large-scale scan).
+- **Micro-Level Parallelism**: Thread Pool (5 workers) per domain-analysis task.
+- **Efficiency**: Allows for **20 concurrent domain scans** across the system, ensuring high-speed analysis even for domains with long-tail TLS handshakes.
 
 ### Tech Stack
 
