@@ -135,6 +135,9 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
     # Service category distribution (refined)
     service_data = db.query(Asset.service_category, func.count(Asset.asset_id)).group_by(Asset.service_category).all()
 
+    # Network type distribution
+    network_data = db.query(Asset.network_type, func.count(Asset.asset_id)).group_by(Asset.network_type).all()
+
     return {
         # ── Flat fields for frontend KPI cards ──
         "total_scans": total_scans,

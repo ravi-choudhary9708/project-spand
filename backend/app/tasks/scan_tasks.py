@@ -332,9 +332,30 @@ def _scan_single_domain(domain: str, scan_id: str, profile: dict) -> Optional[di
             pqc_readiness=_map_pqc_readiness(pqc_label),
             scan_method=algorithm_source,
             algorithm_confidence=algorithm_confidence,
+            network_type=scan_data.get("network_type", "public"),
         )
         db.add(asset)
         db.flush()
+
+        # Data Leak Finding: Internal asset exposed in public CT logs
+        if scan_data.get("network_type") == "internal":
+            _create_finding(
+                db, asset.asset_id,
+                FindingType.OTHER,
+                "MEDIUM",
+                asset_hndl,
+                "CWE-200",  # Exposure of Sensitive Information
+                f"Internal Asset Exposed in Public CT Logs: {domain}",
+                (
+                    f"Domain {domain} resolved to private IP(s) {resolved_ips} but "
+                    f"appears in public Certificate Transparency logs. This means "
+                    f"an internal hostname was included in a TLS certificate that was "
+                    f"submitted to a public CT log, exposing internal network topology. "
+                    f"Review certificate issuance policy to prevent internal hostnames "
+                    f"from appearing in public-facing certificates."
+                ),
+                "CT_LOG_EXPOSURE",
+            )
 
         # Save Certificate(s)
         if scan_data.get("certificates"):
@@ -791,6 +812,7 @@ def _map_protocol(p: str) -> ProtocolType:
         "FTPS":  ProtocolType.FTPS,
         "SSH":   ProtocolType.SSH,
         "VPN":   ProtocolType.VPN,
+        "DNS":   ProtocolType.DNS,
     }.get(p.upper(), ProtocolType.UNKNOWN)
 
 
@@ -825,6 +847,7 @@ def _get_service_category(p: str, domain: str = "", server: str = None) -> str:
         "FTPS":  "file_transfer",
         "SSH":   "remote_access",
         "VPN":   "vpn_gateway",
+        "DNS":   "dns_server",
     }
     return mapping.get(p_upper, "other_service")
 

@@ -18,6 +18,7 @@ import os
 import re
 import socket
 import ssl
+import ipaddress
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import logging
@@ -43,6 +44,30 @@ TLS_PORTS = {
     1723: {"proto": "VPN",    "starttls": None},
     500:  {"proto": "VPN",    "starttls": None},
 }
+# RFC 1918 + reserved private ranges
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),       # Class A private
+    ipaddress.ip_network("172.16.0.0/12"),     # Class B private
+    ipaddress.ip_network("192.168.0.0/16"),    # Class C private
+    ipaddress.ip_network("127.0.0.0/8"),       # Loopback
+    ipaddress.ip_network("169.254.0.0/16"),    # Link-local
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA
+]
+
+def _is_internal_ip(ip: str) -> bool:
+    """
+    Returns True if ip is a private/reserved address (RFC 1918 / RFC 4193).
+    These addresses should never appear as the resolved IP of a public-facing
+    domain. If they do, it means the domain is internal-only and was discovered
+    via CT logs or subfinder from internal cert SANs.
+    """
+    try:
+        addr = ipaddress.ip_address(ip)
+        return any(addr in network for network in _PRIVATE_NETWORKS)
+    except ValueError:
+        return False
+
 # Regex to identify IPv4 addresses
 _IPv4_RE = re.compile(r"^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$")
 
@@ -133,7 +158,8 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
         logger.warning("nmap not found, using fallback scan")
         return _nmap_fallback(target)
 
-    ports = "443,8443,25,587,465,143,993,110,995,21,990,22,1194,1723,500"
+    # Added port 53 for DNS detection (not in fallback to save time)
+    ports = "443,8443,25,587,465,143,993,110,995,21,990,22,1194,1723,500,53"
 
     # Fast SYN scan — service version detection and SSL scripts are NOT needed
     # because TLS/cert data is gathered separately via openssl/python ssl.
@@ -1870,10 +1896,9 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None, i
 # ─────────────────────────────────────────
 
 def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
-
     logger.info(f"Scanning {domain}")
 
-    result = {
+    result: Dict[str, Any] = {
         "domain": domain,
         "resolved_ips": [],
         "open_ports": [],
@@ -1885,6 +1910,8 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         "findings": [],
         "server_software": None,
         "cdn_provider": None,
+        "network_type": "public",
+        "tls_open_ports": [],
     }
 
     # DNS
@@ -1892,14 +1919,29 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
     result["resolved_ips"] = ips
 
     if not ips:
+        result["network_type"] = "restricted"  # resolves nowhere
         return result
 
     target_ip = ips[0]
+
+    # ── Network type detection ────────────────────────────────────────────────
+    # Check if ANY resolved IP is private — means this is an internal asset
+    # Priority: internal > cdn_protected
+    is_internal = any(_is_internal_ip(ip) for ip in ips)
+    if is_internal:
+        result["network_type"] = "internal"
+        logger.info(
+            f"[scan] {domain} resolved to private IP(s) {ips} — "
+            f"marking as internal network asset"
+        )
+    # ─────────────────────────────────────────────────────────────────────────
 
     # CDN
     is_cdn, cdn_provider = _detect_cdn(domain, target_ip)
     result["is_cdn"] = is_cdn
     result["cdn_provider"] = cdn_provider
+    if is_cdn and result["network_type"] == "public":
+        result["network_type"] = "cdn_protected"
 
     # PORT SCAN
     nmap_data = run_nmap_scan(target_ip if not result["is_cdn"] else domain)
@@ -1924,42 +1966,43 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
         result["protocol"] = "FTPS"
     elif 1194 in port_numbers or 1723 in port_numbers or 500 in port_numbers:
         result["protocol"] = "VPN"
+    elif 53 in port_numbers:
+        result["protocol"] = "DNS"
     else:
         result["protocol"] = "UNKNOWN"
 
+    # Restricted fallback: has public IP but no ports responded
+    if (not port_numbers 
+            and result["network_type"] == "public" 
+            and not is_internal):
+        result["network_type"] = "restricted"
+        logger.info(f"[scan] {domain}: public IP but no open ports — marking restricted")
+
+    # TLS-capable open ports for bypass
+    _TLS_CAPABLE = {443, 8443, 465, 993, 995, 990, 587, 25, 143}
+    result["tls_open_ports"] = [
+        p["port"] for p in result["open_ports"]
+        if p["port"] in _TLS_CAPABLE
+    ]
+
     # ───────────────────────────────────────────────
     # TLS SCAN – run on ALL TLS-capable open ports
-    # Including UNKNOWN protocol: try every open port
     # ───────────────────────────────────────────────
     primary_tls_data = None
-
-    # Determine which open ports to attempt TLS on
     tls_scan_targets = []
-
-    # Standard non-TLS ports to skip to avoid wasting time
-    SKIP_TLS_PORTS = {80, 22}
+    SKIP_TLS_PORTS = {80, 22, 53}
 
     for port_num in sorted(port_numbers):
-        # 1. If it's a known TLS port, definitely scan it
-        if port_num in TLS_PORTS:
+        if port_num in TLS_PORTS and port_num not in SKIP_TLS_PORTS:
             tls_scan_targets.append((port_num, TLS_PORTS[port_num].get("starttls")))
-        # 2. If it's NOT a known non-TLS port, TRY it anyway (Thorough Mode)
-        elif port_num not in SKIP_TLS_PORTS:
+        elif port_num not in SKIP_TLS_PORTS and port_num not in TLS_PORTS:
             logger.info(f"[scan] Port {port_num} found open, attempting thorough TLS scan")
             tls_scan_targets.append((port_num, None))
 
-    # For UNKNOWN protocol — also try any open port not in TLS_PORTS
-    if result["protocol"] == "UNKNOWN":
-        for port_num in sorted(port_numbers):
-            if port_num not in TLS_PORTS:
-                tls_scan_targets.append((port_num, None))
-
-    # ── Force 443 Fallback ──────────────────────────────────────────
-    # If target is a domain and no TLS ports were found, force a 443 attempt.
-    # This ensures PATH A is attempted even if nmap is blocked/throttled.
     if not tls_scan_targets and "." in domain and not _IPv4_RE.match(domain):
-        logger.info(f"[scan] No open TLS ports found for {domain}, forcing 443 probe fallback")
-        tls_scan_targets.append((443, None))
+        if 53 not in port_numbers:  # don't force 443 on pure DNS servers
+            logger.info(f"[scan] No TLS ports found for {domain}, forcing 443 probe fallback")
+            tls_scan_targets.append((443, None))
 
     for scan_port, starttls in tls_scan_targets:
 

@@ -33,6 +33,7 @@ class ProtocolType(str, enum.Enum):
     FTPS = "FTPS"
     SSH = "SSH"
     VPN = "VPN"
+    DNS = "DNS"
     UNKNOWN = "UNKNOWN"
 
 
@@ -130,6 +131,7 @@ class Asset(Base):
     server_software = Column(String(200), nullable=True)
     scan_method = Column(String(50), nullable=True)  # openssl_cli | python_ssl | testssl
     algorithm_confidence = Column(String(20), default="verified")  # verified | approximate | default
+    network_type = Column(String(20), default="public")  # public | internal | restricted | cdn_protected
     discovered_at = Column(DateTime, default=datetime.utcnow)
 
     scan_job = relationship("ScanJob", back_populates="assets")

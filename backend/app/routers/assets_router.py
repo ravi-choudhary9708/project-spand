@@ -83,6 +83,7 @@ def _serialize_asset(a: Asset, include_first_cert: bool = False) -> dict:
         "key_size":   None,
         "issuer":     None,
         "algorithm_confidence": a.algorithm_confidence,
+        "network_type": a.network_type or "public",
     }
     # Attach first-cert data to every list item for the table columns
     if a.certificates:
