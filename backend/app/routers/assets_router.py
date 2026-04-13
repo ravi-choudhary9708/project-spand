@@ -11,7 +11,22 @@ from app.auth.auth import get_current_user
 router = APIRouter(prefix="/api/assets", tags=["assets"])
 
 
-@router.get("", summary="List all Assets", description="Retrieves a paginated and filterable list of all discovered assets across all scans.")
+@router.get(
+    "", 
+    summary="List Global Asset Inventory", 
+    description="""
+Provides a filterable inventory of all unique domains and infrastructure discovered across organization scans.
+
+**Supported Filters:**
+- **Protocol**: Filter by service category (e.g., `https`, `ssh`, `dns`).
+- **Min HNDL**: Filter by risk threshold (e.g., `7.5` for critical only).
+- **PQC Readiness**: Filter by state (`Quantum Safe`, `Vulnerable`, etc.).
+- **CDN Status**: View assets with or without CDN protection.
+
+**Security Insights:**
+Each asset includes computed `network_type` (Internal vs Public) and `algorithm_confidence` (Direct Scan vs Inferred).
+"""
+)
 async def list_assets(
     protocol: Optional[str] = Query(None),
     min_hndl: Optional[float] = Query(None),

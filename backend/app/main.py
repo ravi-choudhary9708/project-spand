@@ -57,11 +57,40 @@ def _seed_default_users():
         db.close()
 
 
+description = """
+# 🔐 QuantumShield — High-Performance Quantum-Proof Systems Scanner
+
+QuantumShield is a next-generation security intelligence platform designed for the Post-Quantum (PQ) transition. It automates the discovery of cryptographic vulnerabilities, calculates Harvest-Now-Decrypt-Later (HNDL) risk, and generates CycloneDX CBOM reports for global and regional compliance.
+
+## 🚀 Key Architectural Features
+- **Parallel Scanning Engine**: Hybrid 4x5 concurrency model (20 simultaneous domain scans).
+- **Network Intelligence (Path A/B/C)**: Advanced origin bypass and asset proximity classification.
+- **Regulatory Mapping**: Direct triggers for NIST PQC (FIPS 203/204/205), RBI, and CERT-In.
+
+## 🧪 Documentation & Guides
+Comprehensive deep-dive documentation is available in the project's repository under the `/docs` directory:
+- [01 System Architecture](file:///docs/01_ARCHITECTURE.md)
+- [02 Scanning Pipeline](file:///docs/02_SCANNING_PIPELINE.md)
+- [03 Network Intelligence](file:///docs/03_NETWORK_INTELLIGENCE.md)
+- [04 HNDL Scoring Science](file:///docs/04_HNDL_SCORING_SCIENCE.md)
+- [05 Compliance Enforcement](file:///docs/05_COMPLIANCE_ENFORCEMENT.md)
+
+---
+*Built for PSB Hackathon 2026 — Team Spand (GEC Madhubani)*
+"""
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    description="Quantum-Proof Systems Scanner API - Team Spand, PSB Hackathon 2026",
+    description=description,
     lifespan=lifespan,
+    contact={
+        "name": "Team Spand — Quantum Engineering",
+        "url": "https://github.com/ravi-choudhary9708/project-spand",
+    },
+    license_info={
+        "name": "MIT License",
+    },
 )
 
 # CORS

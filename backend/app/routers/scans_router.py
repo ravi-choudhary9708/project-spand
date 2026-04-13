@@ -31,7 +31,21 @@ class ScanStartResponse(BaseModel):
     status: str
     message: str
 
-@router.post("", response_model=ScanStartResponse, summary="Start a new security scan", description="Initiates a new quantum vulnerability scan for the given organization mapping. Full org scan defaults to true.")
+@router.post(
+    "", 
+    response_model=ScanStartResponse, 
+    summary="Initialize Quantum Scan", 
+    description="""
+Dispatches a background Celery task to perform a full-spectrum quantum vulnerability scan.
+
+**Pipeline Stages:**
+1. **Target Discovery**: Maps subdomains via Subfinder.
+2. **Analysis**: Performs parallel Nmap and TLS handshake probes.
+3. **Intelligence**: Miner CT logs, SPF, and Passive DNS for origin bypass.
+4. **Scoring**: Computes HNDL risk and compliance mapping.
+5. **CBOM**: Generates the CycloneDX 1.4 report.
+"""
+)
 def start_scan(
     body: ScanStartRequest,
     background_tasks: BackgroundTasks,
@@ -266,7 +280,19 @@ def get_scan_assets(
 
 
 # ── GET /scans/{scan_id}/cbom — CycloneDX CBOM
-@router.get("/{scan_id}/cbom", summary="Get CycloneDX CBOM", description="Returns the Cryptographic Bill of Materials (CBOM) in CycloneDX format for the specified scan.")
+@router.get(
+    "/{scan_id}/cbom", 
+    summary="Export CycloneDX CBOM", 
+    description="""
+Retrieves the standard Cryptographic Bill of Materials (CBOM) for the specified scan.
+
+**Output Standard**: CycloneDX v1.4 (JSON)
+**Contents**:
+- Full inventory of cryptographic assets (certificates, ciphers).
+- Vulnerability links to mapped CWEs and HNDL scores.
+- Organization metadata and scan summary.
+"""
+)
 def get_scan_cbom(
     scan_id: str,
     db: Session = Depends(get_db),

@@ -32,6 +32,20 @@ http://localhost
 
 ---
 
+## 📚 Documentation & Deep Dives
+
+For a comprehensive understanding of the system's internals, science, and compliance logic, refer to our detailed documentation suite in the [`docs/`](./docs/) directory:
+
+- [**01 Architecture**](./docs/01_ARCHITECTURE.md): Technical stack, container orchestration, and parallel scan engine.
+- [**02 Scanning Pipeline**](./docs/02_SCANNING_PIPELINE.md): Pre-flight discovery, origin bypass, and the Path A/B/C decision matrix.
+- [**03 Network Intelligence**](./docs/03_NETWORK_INTELLIGENCE.md): Asset classification logic and automated internal data leak detection.
+- [**04 HNDL Science**](./docs/04_HNDL_SCORING_SCIENCE.md): The mathematical formula and per-algorithm risk weights for Harvest-Now-Decrypt-Later.
+- [**05 Compliance Enforcement**](./docs/05_COMPLIANCE_ENFORCEMENT.md): Mapping findings to NIST FIPS 203/204/205, RBI, and CERT-In.
+- [**06 Data & CBOM**](./docs/06_DATA_SCHEMA_HANDBOOK.md): Database schema overview and the state-of-the-art CycloneDX CBOM generator.
+- [**07 Developer Onboarding**](./docs/07_DEVELOPER_ONBOARDING.md): Code structure guide, RBAC security model, and contribution workflow.
+
+---
+
 ## 🎯 What It Does
 
 QuantumShield scans your organization's public-facing domains and tells you:

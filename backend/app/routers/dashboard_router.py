@@ -11,8 +11,24 @@ from app.auth.auth import get_current_user
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 
-@router.get("", summary="Get Dashboard Dashboard metrics", description="Returns aggregated statistics on scans, assets, compliance and PQC readiness across the platform.")
-@router.get("/stats", summary="Get Global Dashboard Stats", description="Alias for the main dashboard metrics. Both return the exact same flat dict.")
+@router.get(
+    "", 
+    summary="Get Aggregate Dashboard Metrics", 
+    description="""
+Retrieves high-level cryptographic risk statistics across all scanned organizations. 
+
+**Metrics Included:**
+- **PQC Readiness**: Percentage of assets using quantum-safe algorithms.
+- **HNDL Trends**: Global average Harvest-Now-Decrypt-Later risk scores.
+- **Infrastructure Topology**: Distribution of CDNs, server software, and network tiers.
+- **Compliance Heatmap**: Count of non-compliant assets per supported framework (NIST, RBI, CERT-In).
+"""
+)
+@router.get(
+    "/stats", 
+    summary="Get Global Dashboard Stats (Alias)", 
+    description="Identical to the root dashboard endpoint. Provisioned for frontend legacy support."
+)
 async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     # Total scans
     total_scans = db.query(ScanJob).count()
