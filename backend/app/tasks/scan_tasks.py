@@ -536,20 +536,10 @@ def run_full_scan(self, scan_id: str, full_scan: bool = True):
             ct_cache = _build_ct_cache(root)
             intel = {"ct": ct_cache, "origin_targets": []}
             
-            # 3b. Mine CT Cache for origin candidates once per root
+            # 3b. Mine CT Cache for origin candidates once per root (IPs only)
             for val, entry in ct_cache.items():
                 if _IPv4_RE.match(val):
                     intel["origin_targets"].append({"type": "ip", "value": val, "cert_domain": root, "source": "ct_cache"})
-                elif _looks_like_origin_host(val):
-                    # Only add if it's not the root itself (too generic)
-                    if val != root:
-                        intel["origin_targets"].append({
-                            "type": "host", 
-                            "value": val, 
-                            "cert_domain": root, 
-                            "resolvable": str(_can_resolve(val)), 
-                            "source": "ct_cache"
-                        })
 
             # 3c. SPF Mining (Root level)
             spf_ips = get_ips_from_spf(root)

@@ -145,6 +145,7 @@ function TechnicalDashboard({ stats, role }) {
         <KpiCard icon="⚠️" label="Avg HNDL Score"     value={stats.avg_hndl != null ? stats.avg_hndl.toFixed(2) : "—"} sub={`/ 10 — ${stats.avg_hndl != null ? hndlLabel(stats.avg_hndl) : ""}`} color={riskColor} />
         <KpiCard icon="🔒" label="PQC Ready"           value={stats.pqc_ready_pct != null ? `${stats.pqc_ready_pct.toFixed(0)}%` : "—"} color="#10b981" />
         <KpiCard icon="🚨" label="Critical Findings"   value={stats.critical_findings ?? "—"} color="#ef4444" />
+        <KpiCard icon="🔒" label="Internal Assets"     value={stats.network_distribution?.find(n => n.network_type === 'internal')?.count ?? 0} color="#f97316" sub="Potential exposures" />
         <KpiCard icon="📜" label="Total Findings"      value={stats.total_findings ?? "—"} color="#f59e0b" />
         <KpiCard icon="🏢" label="Assets Scanned"      value={stats.total_scans ?? "—"} sub="scan jobs" color="#8b5cf6" />
       </div>
@@ -206,6 +207,45 @@ function TechnicalDashboard({ stats, role }) {
             </ResponsiveContainer>
           ) : (
             <p style={styles.noData}>No data available. Run a scan to see algorithm details.</p>
+          )}
+        </div>
+      </div>
+
+      <div style={styles.chartsRow}>
+        {/* Pie — Network Topology */}
+        <div style={styles.chartCard}>
+          <h3 style={styles.cardTitle}>Network Topology</h3>
+          {stats.network_distribution?.length > 0 ? (
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie 
+                  data={stats.network_distribution} 
+                  dataKey="count" 
+                  nameKey="network_type" 
+                  cx="50%" cy="50%" 
+                  innerRadius={60}
+                  outerRadius={80} 
+                  paddingAngle={5}
+                >
+                  {stats.network_distribution.map((entry, i) => {
+                    const colors = {
+                      public: "#3b82f6",
+                      internal: "#ef4444",
+                      cdn_protected: "#10b981",
+                      restricted: "#f59e0b"
+                    };
+                    return <Cell key={i} fill={colors[entry.network_type] || "#64748b"} />;
+                  })}
+                </Pie>
+                <Tooltip 
+                  contentStyle={{ background: "#1e293b", border: "1px solid #334155" }} 
+                  formatter={(v, n) => [v, n.toUpperCase()]}
+                />
+                <Legend verticalAlign="bottom" height={36}/>
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p style={styles.noData}>No network topology data.</p>
           )}
         </div>
       </div>

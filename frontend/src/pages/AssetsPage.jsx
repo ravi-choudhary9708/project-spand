@@ -41,6 +41,27 @@ function ScanMethodBadge({ method }) {
   )
 }
 
+/** Badge for network_type (public / internal / cdn_protected / restricted) */
+function NetworkBadge({ type }) {
+  const map = {
+    internal:      { label: 'internal',      color: '#ef4444', icon: '🔒' },
+    cdn_protected: { label: 'cdn_protected', color: '#10b981', icon: '🛡️' },
+    restricted:    { label: 'restricted',    color: '#f59e0b', icon: '🚧' },
+    public:        { label: 'public',        color: '#3b82f6', icon: '🌐' },
+  }
+  const m = map[type] || { label: type || 'public', color: '#94a3b8', icon: '🌐' }
+  return (
+    <span style={{
+      fontSize: 10, fontWeight: 700, padding: '2px 8px',
+      borderRadius: 6, background: `${m.color}15`, color: m.color,
+      border: `1px solid ${m.color}40`, textTransform: 'uppercase',
+      display: 'inline-flex', alignItems: 'center', gap: 4
+    }}>
+      <span style={{ fontSize: 12 }}>{m.icon}</span> {m.label}
+    </span>
+  )
+}
+
 /** One info row inside the detail panel */
 function InfoRow({ label, value, mono }) {
   if (!value && value !== 0) return null
@@ -195,6 +216,7 @@ function AssetDetail({ asset, onClose }) {
         <DetailKpi label="Avg HNDL" value={asset.hndl_score?.toFixed(2)} color={hndlColor(asset.hndl_score)} />
         <DetailKpi label="Server" value={asset.server_software || "Unknown"} color="#3b82f6" />
         <DetailKpi label="CDN Provider" value={asset.cdn_provider || "None / Direct"} color="#8b5cf6" />
+        <DetailKpi label="Network" value={asset.network_type?.toUpperCase()} color={asset.network_type === 'internal' ? '#ef4444' : '#10b981'} />
         <DetailKpi label="Category" value={asset.service_category?.replace('_', ' ').toUpperCase()} color="#f59e0b" />
       </div>
 
@@ -294,6 +316,7 @@ export default function AssetsPage() {
                     <tr>
                       <th>Domain</th>
                       <th>Protocol</th>
+                      <th>Network</th>
                       <th>Algorithm</th>
                       <th>Key Size</th>
                       <th>HNDL Score</th>
@@ -323,6 +346,7 @@ export default function AssetsPage() {
                             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{(a.resolved_ips || []).join(', ')}</div>
                           </td>
                           <td><span className="tag">{a.protocol || '—'}</span></td>
+                          <td><NetworkBadge type={a.network_type} /></td>
 
                           {/* Algorithm — real value from scanner */}
                           <td>
