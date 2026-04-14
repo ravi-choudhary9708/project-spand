@@ -297,7 +297,6 @@ def _scan_single_domain(domain: str, scan_id: str, profile: dict) -> Optional[di
         # ── 3. Finalization: Scoring and Persistence ────────────────
         final_algo     = main_algorithm or "RSA"
         final_key_size = main_key_size  or 2048
-        sensitivity    = _get_data_sensitivity(domain)
         
         # Protocol deduction
         if protocol == "UNKNOWN" and scan_data.get("cipher_suites"):
@@ -309,7 +308,15 @@ def _scan_single_domain(domain: str, scan_id: str, profile: dict) -> Optional[di
 
         # Scoring
         tls_version_str = tls_data.get("tls_version")
-        asset_hndl_result = calculate_hndl_score(final_algo, final_key_size, sensitivity, expires_at, tls_version_str)
+        asset_hndl_result = calculate_hndl_score(
+            algorithm        = final_algo,
+            key_size         = final_key_size,
+            domain           = domain,                          # v2: keyword-based sensitivity
+            expires_at       = expires_at,
+            tls_version      = tls_version_str,
+            cipher_suite     = tls_data.get("cipher_suite"),   # v2: PFS detection
+            service_category = _get_service_category(protocol, domain, scan_data.get("server_software")),
+        )
         asset_hndl = asset_hndl_result[0] if isinstance(asset_hndl_result, tuple) else asset_hndl_result
         hndl_breakdown = asset_hndl_result[1] if isinstance(asset_hndl_result, tuple) else {}
         pqc_label  = get_pqc_readiness_label(asset_hndl)
