@@ -43,7 +43,8 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
     partially_safe = db.query(Asset).filter(Asset.pqc_readiness == PQCReadiness.PARTIALLY_SAFE).count()
 
     # Average HNDL score
-    avg_hndl = db.query(func.avg(Asset.hndl_score)).scalar() or 0.0
+    avg_hndl_q = db.query(func.avg(Asset.hndl_score)).scalar()
+    avg_hndl = float(avg_hndl_q) if avg_hndl_q is not None else 0.0
 
     # Findings by severity
     critical_findings = db.query(Finding).filter(Finding.severity == "CRITICAL").count()
@@ -81,13 +82,19 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
             Asset.pqc_readiness == PQCReadiness.QUANTUM_SAFE
         ).count()
         scan_pqc_pct = round((scan_quantum_safe / asset_count * 100) if asset_count > 0 else 0, 1)
+
+        # Derive target domain safely
+        target_domain = s.org_name
+        if s.target_assets and isinstance(s.target_assets, list) and len(s.target_assets) > 0:
+            target_domain = s.target_assets[0]
+
         recent_scans.append({
             "scan_id": s.scan_id,
             "org_name": s.org_name,
-            "target_domain": (s.target_assets[0] if s.target_assets else s.org_name),
-            "status": s.status.value if s.status else "PENDING",
+            "target_domain": target_domain,
+            "status": s.status.value if hasattr(s.status, 'value') else str(s.status) if s.status else "PENDING",
             "total_assets": asset_count,
-            "avg_hndl": round(float(scan_avg_hndl), 2) if scan_avg_hndl else 0.0,
+            "avg_hndl": round(float(scan_avg_hndl), 2) if scan_avg_hndl is not None else 0.0,
             "pqc_ready_pct": scan_pqc_pct,
             "started_at": s.started_at.isoformat() if s.started_at else None,
             "initiated_by": None,
@@ -160,7 +167,7 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
         "completed_scans": completed_scans,
         "running_scans": running_scans,
         "total_assets": total_assets,
-        "avg_hndl": round(float(avg_hndl), 2),
+        "avg_hndl": round(avg_hndl, 2),
         "pqc_ready_pct": pqc_ready_pct,
         "critical_findings": critical_findings,
         "high_findings": high_findings,
@@ -185,9 +192,10 @@ async def get_dashboard(db: Session = Depends(get_db), current_user=Depends(get_
         "hndl_distribution": hndl_distribution,
         "algo_breakdown": algo_breakdown,
         "key_size_breakdown": key_size_breakdown,
-        "protocol_distribution": [{"protocol": str(p), "count": c} for p, c in protocol_data],
+        "protocol_distribution": [{"protocol": p.value if hasattr(p, 'value') else str(p), "count": c} for p, c in protocol_data],
         "server_distribution": [{"server": s, "count": c} for s, c in server_data],
         "cdn_distribution": [{"provider": p, "count": c} for p, c in cdn_data],
         "service_distribution": [{"category": s, "count": c} for s, c in service_data],
+        "network_distribution": [{"network_type": n, "count": c} for n, c in network_data],
         "recent_scans": recent_scans,
     }
