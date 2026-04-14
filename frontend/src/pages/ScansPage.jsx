@@ -227,8 +227,11 @@ export default function ScansPage() {
                           <span>Alg: <strong style={{ color: 'white' }}>{a.hndl_breakdown.algorithm_risk}</strong></span>
                           <span>Key: <strong style={{ color: 'white' }}>{a.hndl_breakdown.key_size_risk}</strong></span>
                           <span>TLS: <strong style={{ color: 'white' }}>{a.hndl_breakdown.tls_version_risk}</strong></span>
-                          <span>Sens: <strong style={{ color: 'white' }}>{a.hndl_breakdown.data_sensitivity}</strong></span>
                           <span>Expiry: <strong style={{ color: 'white' }}>{a.hndl_breakdown.expiry_risk}</strong></span>
+                          <span>Sens Wt: <strong style={{ color: 'white' }}>{a.hndl_breakdown.w_sensitivity ?? a.hndl_breakdown.data_sensitivity}</strong></span>
+                          {a.hndl_breakdown.bcs !== undefined && <span>BCS: <strong style={{ color: 'white' }}>{a.hndl_breakdown.bcs}</strong></span>}
+                          {a.hndl_breakdown.m_shelf !== undefined && <span>Shelf: <strong style={{ color: 'white' }}>{a.hndl_breakdown.m_shelf}x</strong></span>}
+                          {a.hndl_breakdown.m_pfs !== undefined && <span>PFS: <strong style={{ color: 'white' }}>{a.hndl_breakdown.m_pfs}x</strong></span>}
                         </div>
                       )}
 
