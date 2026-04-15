@@ -267,12 +267,17 @@ export default function AssetsPage() {
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [filter, setFilter]   = useState({ min_hndl: '', pqc_readiness: '' })
+  const [page, setPage]       = useState(1)
+  const pageSize = 50;
 
-  useEffect(() => { loadAssets() }, [filter])
+  useEffect(() => { loadAssets() }, [filter, page])
 
   const loadAssets = async () => {
     setLoading(true)
-    const params = {}
+    const params = {
+      limit: pageSize,
+      offset: (page - 1) * pageSize
+    }
     if (filter.min_hndl)     params.min_hndl = filter.min_hndl
     if (filter.pqc_readiness) params.pqc_readiness = filter.pqc_readiness
     try { const r = await api.get('/assets', { params }); setData(r.data) } catch {} finally { setLoading(false) }
@@ -291,7 +296,7 @@ export default function AssetsPage() {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <select className="form-select" style={{ width: 160 }} value={filter.pqc_readiness}
-            onChange={e => setFilter({ ...filter, pqc_readiness: e.target.value })}>
+            onChange={e => { setFilter({ ...filter, pqc_readiness: e.target.value }); setPage(1); }}>
             <option value="">All Readiness</option>
             <option value="Quantum Safe">Quantum Safe</option>
             <option value="Partially Safe">Partially Safe</option>
@@ -299,7 +304,7 @@ export default function AssetsPage() {
             <option value="Critical">Critical</option>
           </select>
           <input className="form-input" style={{ width: 140 }} type="number" placeholder="Min HNDL" value={filter.min_hndl}
-            onChange={e => setFilter({ ...filter, min_hndl: e.target.value })} />
+            onChange={e => { setFilter({ ...filter, min_hndl: e.target.value }); setPage(1); }} />
         </div>
       </div>
 
@@ -385,6 +390,52 @@ export default function AssetsPage() {
                     })}
                   </tbody>
                 </table>
+                {data.total > pageSize && (
+                  <div style={{ 
+                    padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+                    borderTop: '1px solid rgba(255,255,255,0.05)', backgroundColor: 'rgba(0,0,0,0.15)' 
+                  }}>
+                    <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                      Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, data.total)} of {data.total} assets
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <button 
+                        onClick={() => setPage(p => Math.max(1, p - 1))} 
+                        disabled={page === 1}
+                        style={{ padding: '6px 12px', fontSize: 13, borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: page === 1 ? '#6b7280' : 'var(--text-primary)', cursor: page === 1 ? 'not-allowed' : 'pointer', opacity: page === 1 ? 0.5 : 1 }}>
+                        Prev
+                      </button>
+                      
+                      {Array.from({ length: Math.ceil(data.total / pageSize) || 1 }, (_, i) => i + 1)
+                        .filter(p => p === 1 || p === Math.ceil(data.total / pageSize) || Math.abs(p - page) <= 2)
+                        .map((p, i, arr) => (
+                          <React.Fragment key={p}>
+                            {i > 0 && arr[i - 1] !== p - 1 && <span style={{ padding: '0 4px', color: '#6b7280' }}>...</span>}
+                            <button 
+                              onClick={() => setPage(p)}
+                              style={{ 
+                                padding: '6px 12px', fontSize: 13, borderRadius: 6, border: '1px solid',
+                                borderColor: page === p ? 'var(--accent-cyan)' : 'rgba(255,255,255,0.1)',
+                                background: page === p ? 'rgba(0, 212, 255, 0.1)' : 'transparent',
+                                color: page === p ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                                cursor: 'pointer',
+                                fontWeight: page === p ? 600 : 400
+                              }}>
+                              {p}
+                            </button>
+                          </React.Fragment>
+                        ))
+                      }
+                      
+                      <button 
+                        onClick={() => setPage(p => Math.min(Math.ceil(data.total / pageSize), p + 1))} 
+                        disabled={page === Math.ceil(data.total / pageSize)}
+                        style={{ padding: '6px 12px', fontSize: 13, borderRadius: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: page === Math.ceil(data.total / pageSize) ? '#6b7280' : 'var(--text-primary)', cursor: page === Math.ceil(data.total / pageSize) ? 'not-allowed' : 'pointer', opacity: page === Math.ceil(data.total / pageSize) ? 0.5 : 1 }}>
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )
           }
