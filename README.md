@@ -97,6 +97,22 @@ When unchecked, the scanner will **only scan the exact URL you provide** — no 
 
 ---
 
+## 🕸️ Infrastructure Visualizer (Node Graph)
+
+QuantumShield includes a state-of-the-art **Interactive Topology Map** that visualizes your organization's cryptographic infrastructure using advanced force-directed physics.
+
+### Key Visual Features:
+- **Hierarchical Gravity**: Unlike standard graphs that collapse into a "gravity well," QuantumShield uses distinct force groups (Org: -800, Domain: -200, IP: -80, Port: -30) to ensure clean spacing and clear hierarchy.
+- **HNDL Heatmap**: Domain nodes are color-coded in real-time based on their risk (Green → Orange → Red).
+- **Network Awareness**: Internal IPs (RFC 1918) glow red, while CDN-protected nodes are highlighted with purple rings.
+- **Three Layout Modes**:
+    - **Force-directed**: Organic, physics-based movement.
+    - **Radial Tiers**: Concentric rings showing logical distance from the core.
+    - **Cluster**: Grouped by asset type into optimized quadrants.
+- **Deep Interactivity**: Link distance sliders, type-based filtering, and pin-to-drag node manipulation.
+
+---
+
 ##  How the Scan Works — Complete Pipeline
 
 When you click "Start Scan" and enter a domain:
