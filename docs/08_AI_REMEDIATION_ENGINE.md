@@ -4,7 +4,7 @@ The **AI Remediation Engine** is QuantumShield's advanced advisory layer. It bri
 
 ---
 
-## 🤖 Dual-Engine Architecture
+##  Dual-Engine Architecture
 
 To ensure high availability and technical depth, QuantumShield utilizes a multi-model orchestration pattern via the **Hugging Face Router**.
 
@@ -19,7 +19,7 @@ If all AI models are unreachable, the system reverts to **Expert Static Playbook
 
 ---
 
-## 🛠️ The Remediation Pipeline
+##  The Remediation Pipeline
 
 When a finding is selected, the engine executes the following steps:
 
@@ -33,7 +33,7 @@ When a finding is selected, the engine executes the following steps:
 
 ---
 
-## 📖 Anatomy of a Playbook
+##  Anatomy of a Playbook
 
 Each AI-generated playbook contains three critical sections:
 
@@ -50,7 +50,7 @@ Drop-in code blocks. Examples include:
 
 ---
 
-## 🔒 Post-Quantum Recommendations
+##  Post-Quantum Recommendations
 
 The engine is biased toward **Crypto-Agility** and **Hybrid Security**, recommending the following as the gold standard:
 - **KEM**: ML-KEM-768 (Kyber)

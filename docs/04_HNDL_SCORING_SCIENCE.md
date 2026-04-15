@@ -2,7 +2,7 @@
 
 The **Harvest Now, Decrypt Later (HNDL)** score is the heart of QuantumShield's risk assessment. In Version 2, the scoring engine has evolved from a simple weighted sum to a context-aware risk model that accounts for data longevity, session security, and technical penalties.
 
-## 📐 The HNDL v2 Formula
+##  The HNDL v2 Formula
 
 The final risk score is calculated by combining a **Base Cryptographic Score (BCS)** with four **Context Multipliers**:
 
@@ -22,7 +22,7 @@ BCS = (AlgoVuln × 0.50) + (KeySizeRisk × 0.20) + (TLSRisk × 0.20) + (ExpiryRi
 
 ---
 
-## 🚀 Context Multipliers
+##  Context Multipliers
 
 Multipliers amplify or reduce the BCS based on the environment of the asset.
 
@@ -52,7 +52,7 @@ Determines how long the captured data remains valuable to an attacker:
 
 ---
 
-## 🛑 The PQC Kill Switch
+##  The PQC Kill Switch
 
 If an asset is detected using a NIST-standardized Post-Quantum algorithm (**ML-KEM**, **ML-DSA**, or **SLH-DSA**), the scoring engine activates the **PQC Kill Switch**. 
 

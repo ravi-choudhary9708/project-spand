@@ -2,7 +2,7 @@
 
 QuantumShield doesn't just scan certificates; it analyzes the **network context** of every asset to help security teams prioritize their response based on asset proximity and exposure.
 
-## 🏷️ Asset Classification Tiers
+## Asset Classification Tiers
 
 Every discovered asset is assigned one of four network types:
 
@@ -15,7 +15,7 @@ Every discovered asset is assigned one of four network types:
 
 ---
 
-## 🚫 Data Leak Detection (CWE-200)
+##  Data Leak Detection (CWE-200)
 
 One of QuantumShield's advanced intelligence features is the automated detection of **Infrastructure Exposure**. 
 

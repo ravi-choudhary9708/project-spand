@@ -2,7 +2,7 @@
 
 Welcome to the QuantumShield development team. This guide covers the repository structure, the security model, and how to get started with code contributions.
 
-## 📂 Repository Atlas
+##  Repository Atlas
 
 | Directory | Purpose |
 | :--- | :--- |
@@ -19,7 +19,7 @@ Welcome to the QuantumShield development team. This guide covers the repository 
 
 ---
 
-## 🔐 The RBAC Security Model
+##  The RBAC Security Model
 
 QuantumShield uses a 5-role Role-Based Access Control system (`UserRole` enum).
 
@@ -40,7 +40,7 @@ def start_scan(current_user=Depends(require_roles(UserRole.ADMIN, UserRole.SECUR
 
 ---
 
-## 🛠️ Getting Started (Development)
+##  Getting Started (Development)
 
 1. **Environment Setup**: Copy `.env.example` to `.env`.
 2. **Docker Dev**: Use `docker-compose up --build`. The backend code is synced via volumes.

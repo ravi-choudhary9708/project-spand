@@ -21,7 +21,7 @@ QuantumShield maps every cryptographic finding to international and regional com
 
 ---
 
-## 📊 Compliance Status Logic
+##  Compliance Status Logic
 
 For every finding, the **Compliance Engine** (`compliance_engine.py`) returns a status:
 

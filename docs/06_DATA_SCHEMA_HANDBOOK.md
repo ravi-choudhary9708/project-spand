@@ -18,7 +18,7 @@ QuantumShield maintain a relational security model that links every discovery ba
 
 ---
 
-## 🛠️ The CycloneDX CBOM (Cryptographic Bill of Materials)
+##  The CycloneDX CBOM (Cryptographic Bill of Materials)
 
 QuantumShield is a pioneer in **CBOM generation**. At the end of every scan, the `cbom_generator.py` engine assembles all discovered assets, certificates, and ciphers into a standardized CycloneDX JSON blob.
 
@@ -31,7 +31,7 @@ This file can be exported and imported into high-level risk management platforms
 
 ---
 
-## 🤖 AI Remediation Logic
+##  AI Remediation Logic
 
 When a vulnerability is found (e.g., RSA-2048), the system doesn't just flag it. It generates a **Remediation Playbook**:
 1. **Detection**: Identify the weak algorithm.

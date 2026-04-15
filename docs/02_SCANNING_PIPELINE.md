@@ -23,7 +23,7 @@ flowchart TD
 
 ---
 
-## 🛤️ The Three Paths
+##  The Three Paths
 
 ### PATH A: Direct Investigation (High Confidence)
 If a domain is reachable on port 443 (or other TLS ports), the scanner performs a direct handshake using the **TLS Cascade**:
@@ -41,7 +41,7 @@ If no network connection is possible and no historical logs exist, the scanner a
 
 ---
 
-## 🎯 Strict Scope Discovery
+##  Strict Scope Discovery
 
 QuantumShield enforces a **Strict Discovery Boundary** to prevent "Scope Bloat":
 1. **Primary Source**: Subfinder — provides public-facing subdomains authorized for scanning.

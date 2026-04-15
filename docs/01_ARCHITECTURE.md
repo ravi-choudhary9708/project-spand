@@ -46,6 +46,6 @@ Inside each worker process, the Analysis Stage (`scan_tasks.py`) utilizes a `Thr
 
 ---
 
-## 🔒 Security Model (RBAC)
+##  Security Model (RBAC)
 
 Documentation on the 5-role Role-Based Access Control system can be found in the [Developer Onboarding Guide](./07_DEVELOPER_ONBOARDING.md).
