@@ -82,13 +82,30 @@ export default function ScansPage() {
   const [findings, setFindings] = useState([])
   const [assets, setAssets] = useState([])
 
-  useEffect(() => { loadScans() }, [])
+  useEffect(() => {
+    loadScans();
+    const interval = setInterval(() => {
+      api.get('/scans').then(r => setScans(r.data)).catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const loadScans = async () => {
-    try { const r = await api.get('/scans'); setScans(r.data) } catch {} finally { setLoading(false) }
-    // Poll running scans
-    setTimeout(() => { const running = scans.some(s => s.status === 'RUNNING' || s.status === 'PENDING'); if (running) loadScans() }, 5000)
+    try { const r = await api.get('/scans'); setScans(r.data); } catch {} finally { setLoading(false); }
   }
+
+  useEffect(() => {
+    if (selected) {
+      const updated = scans.find(s => s.scan_id === selected.scan_id);
+      if (updated) {
+        if ((selected.status === 'RUNNING' || selected.status === 'PENDING') && updated.status === 'COMPLETED') {
+          selectScan(updated);
+        } else if (updated.progress !== selected.progress || updated.status !== selected.status || updated.current_step !== selected.current_step) {
+          setSelected(updated);
+        }
+      }
+    }
+  }, [scans]);
 
   const selectScan = async (scan) => {
     setSelected(scan)
