@@ -18,6 +18,7 @@ import ScansPage        from "./pages/ScansPage";
 import AssetsPage       from "./pages/AssetsPage";
 import FindingsPage     from "./pages/FindingsPage";
 import CBOMPage         from "./pages/CBOMPage";
+import InfraGraphPage   from "./pages/InfraGraphPage";
 import LoginPage        from "./pages/LoginPage";
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
@@ -88,6 +89,12 @@ const NAV_ITEMS = [
     label: "CBOM",
     icon: "📋",
     roles: ["ADMIN", "SECURITY_ANALYST", "COMPLIANCE_OFFICER"],
+  },
+  {
+    to: "/graph",
+    label: "Graph",
+    icon: "🕸️",
+    roles: ["ADMIN", "SECURITY_ANALYST", "SOC_TEAM"],
   },
 ];
 
@@ -283,6 +290,16 @@ function AppLayout() {
             element={
               <ProtectedRoute allowedRoles={["ADMIN","SECURITY_ANALYST","COMPLIANCE_OFFICER"]}>
                 <CBOMPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Graph — ADMIN, ANALYST, SOC */}
+          <Route
+            path="/graph"
+            element={
+              <ProtectedRoute allowedRoles={["ADMIN","SECURITY_ANALYST","SOC_TEAM"]}>
+                <InfraGraphPage />
               </ProtectedRoute>
             }
           />
