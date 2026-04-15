@@ -72,13 +72,25 @@ def generate_cbom(scan_job: Dict, assets: List[Dict]) -> Dict[str, Any]:
 
         # Add cipher suites
         for cipher in asset.get("cipher_suites", []):
+            cipher_name = cipher.get("name", "").upper()
+            if "GCM" in cipher_name:
+                mode = "gcm"
+            elif "CHACHA20" in cipher_name or "POLY1305" in cipher_name:
+                mode = "chacha20"
+            elif "CCM" in cipher_name:
+                mode = "ccm"
+            elif "CBC" in cipher_name:
+                mode = "cbc"
+            else:
+                mode = "unknown"
+
             component["cryptoProperties"]["algorithmProperties"].append({
                 "primitive": "cipher",
                 "parameterSetIdentifier": cipher.get("name", "unknown"),
                 "executionEnvironment": "hardware-unknown",
                 "implementationPlatform": "unknown",
                 "certificationLevel": ["other"],
-                "mode": "cbc",
+                "mode": mode,
                 "tlsVersion": cipher.get("tls_version", ""),
                 "keyExchange": cipher.get("key_exchange", ""),
                 "quantumRisk": cipher.get("quantum_risk", 0.0),
@@ -127,8 +139,8 @@ def generate_cbom(scan_job: Dict, assets: List[Dict]) -> Dict[str, Any]:
                             "vector": f"HNDL/{finding.get('type', 'unknown')}",
                         }
                     ],
-                    "description": finding.get("description", ""),
-                    "recommendation": finding.get("remediation", ""),
+                    "description": finding.get("description", "") or "",
+                    "recommendation": finding.get("remediation", "") or "",
                     "affects": [{"ref": bom_ref}],
                 }
                 cbom["vulnerabilities"].append(vuln)

@@ -737,6 +737,7 @@ def _generate_scan_cbom(db, scan_job, processed_assets):
                         "hndl_score": c.hndl_score,
                         "expires_at": c.expires_at.isoformat() if c.expires_at else None,
                         "is_pqc":     c.is_pqc,
+                        "is_approximate": getattr(c, "is_approximate", False),
                     }
                     for c in certs
                 ],
