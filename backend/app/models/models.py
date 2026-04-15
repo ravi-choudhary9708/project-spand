@@ -216,6 +216,7 @@ class Remediation(Base):
     status = Column(String(50), default="OPEN")
     created_at = Column(DateTime, default=datetime.utcnow)
     pqc_alternative = Column(String(500), nullable=True)
+    detailed_report = Column(Text, nullable=True)
 
     finding = relationship("Finding", back_populates="remediation_plan")
 

@@ -17,6 +17,7 @@ from ..models.models import (
 from ..auth.auth import get_current_user, require_roles
 from ..tasks.scan_tasks import run_full_scan
 from ..celery_app import celery_app
+from ..engines.ai_remediation import generate_ai_playbook_on_demand
 
 router = APIRouter(prefix="/api/scans", tags=["scans"])
 
@@ -325,3 +326,65 @@ def delete_scan(
     db.delete(scan)
     db.commit()
     return {"message": f"Scan {scan_id} deleted"}
+
+
+# ── POST /scans/{scan_id}/findings/{finding_id}/ai-remediation
+@router.post("/{scan_id}/findings/{finding_id}/ai-remediation", summary="Generate AI Remediation", description="Query HuggingFace on-demand for a finding.")
+def generate_ai_remediation(
+    scan_id: str,
+    finding_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    finding = db.query(Finding).filter(Finding.finding_id == finding_id).first()
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+
+    remedy = db.query(Remediation).filter(Remediation.finding_id == finding_id).first()
+    if remedy and remedy.status == "AI_GENERATED" and remedy.detailed_report:
+        return {
+            "steps": remedy.steps,
+            "priority": remedy.priority,
+            "pqc_alternative": remedy.pqc_alternative,
+            "detailed_report": remedy.detailed_report,
+            "status": remedy.status
+        }
+
+    algo = finding.title
+    
+    context = {
+        "finding_title": finding.title,
+        "description": finding.description,
+        "domain": finding.asset.domain if finding.asset else "Unknown Domain",
+        "severity": finding.severity
+    }
+    
+    playbook = generate_ai_playbook_on_demand(finding.type.value if hasattr(finding.type, "value") else str(finding.type), algo, context)
+
+    if remedy:
+        remedy.steps = playbook.get("steps", remedy.steps)
+        remedy.priority = playbook.get("priority", remedy.priority)
+        remedy.pqc_alternative = playbook.get("pqc_alternative", remedy.pqc_alternative)
+        remedy.detailed_report = playbook.get("detailed_report", "")
+        remedy.status = "AI_GENERATED"
+    else:
+        remedy = Remediation(
+            playbook_id=str(uuid.uuid4()), 
+            finding_id=finding_id, 
+            priority=playbook.get("priority", 5), 
+            steps=playbook.get("steps", []), 
+            pqc_alternative=playbook.get("pqc_alternative", ""),
+            detailed_report=playbook.get("detailed_report", ""),
+            status="AI_GENERATED"
+        )
+        db.add(remedy)
+    
+    db.commit()
+    
+    return {
+        "steps": remedy.steps,
+        "priority": remedy.priority,
+        "pqc_alternative": remedy.pqc_alternative,
+        "detailed_report": remedy.detailed_report,
+        "status": remedy.status
+    }

@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     SCAN_RATE_LIMIT_DELAY: float = 0.5  # seconds between probes
     CT_CACHE_TTL_HOURS: int = 24  # TTL for CT log redis cache
 
+    # External APIs
+    HUGGINGFACE_API_KEY: Optional[str] = None
+
     class Config:
         env_file = ".env"
         case_sensitive = True
