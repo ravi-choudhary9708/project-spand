@@ -43,6 +43,7 @@ For a comprehensive understanding of the system's internals, science, and compli
 - [**05 Compliance Enforcement**](./docs/05_COMPLIANCE_ENFORCEMENT.md): Mapping findings to NIST FIPS 203/204/205, RBI, and CERT-In.
 - [**06 Data & CBOM**](./docs/06_DATA_SCHEMA_HANDBOOK.md): Database schema overview and the state-of-the-art CycloneDX CBOM generator.
 - [**07 Developer Onboarding**](./docs/07_DEVELOPER_ONBOARDING.md): Code structure guide, RBAC security model, and contribution workflow.
+- [**08 AI Remediation Engine**](./docs/08_AI_REMEDIATION_ENGINE.md): Deep architectural dives and engineer-ready migration blueprints via dual-engine AI.
 
 ---
 
@@ -64,10 +65,10 @@ QuantumShield scans your organization's public-facing domains and tells you:
 |---------|-------------|
 | **Asset Discovery** | Subfinder (strictly bounded) — discovers public subdomains only |
 | **Network Classification** | 4-tier model: `public`, `internal`, `cdn_protected`, `restricted` |
-| **HNDL Scoring** | Weighted formula: Algorithm × 0.40 + Key Size × 0.20 + Data Sensitivity × 0.20 + TLS Version × 0.10 + Cert Expiry × 0.10 |
+| **HNDL Scoring** | Context-aware formula: BCS × Sensitivity × Shelf Life × PFS × TLS Version |
 | **CycloneDX CBOM** | Industry-standard Cryptographic Bill of Materials, exportable as JSON or XML |
 | **Compliance Mapping** | Automatic mapping to NIST FIPS 203/204/205, NIST IR 8547, RBI, CERT-In |
-| **AI Remediation** | Step-by-step migration playbooks for RSA → ML-KEM, ECC → ML-DSA |
+| **AI Remediation** | Dynamic migration playbooks via Qwen 2.5 and Llama 3.1 with dual-engine fallback |
 | **Multi-protocol** | HTTPS, SMTP, IMAP, SSH, VPN, FTPS, DNS |
 | **Parallel Engine** | Hybrid architecture: 4 Celery workers × 5 Parallel Threads per scan |
 | **RBAC Dashboard** | 5 user roles — Admin, Analyst, Compliance, SOC, Management |
@@ -189,15 +190,15 @@ Creates a CycloneDX 1.4 JSON Cryptographic Bill of Materials with all findings.
 
 ---
 
-## 📐 HNDL Risk Score Formula
+## 📐 HNDL Risk Score Formula (v2)
 
+```text
+HNDL_final = min(10.0, BCS × W_sensitivity × M_shelf × M_pfs × M_tls_version)
 ```
-HNDL Score (0–10) =
-  (Algorithm Vulnerability Score  × 0.40)     ← 40% weight
-+ (Key Size Risk Score            × 0.20)     ← 20% weight
-+ (Data Sensitivity Weight        × 0.20)     ← 20% weight
-+ (TLS Version Risk               × 0.10)     ← 10% weight
-+ (Certificate Expiry Risk        × 0.10)     ← 10% weight
+
+### Base Cryptographic Score (BCS)
+```text
+BCS = (AlgoVuln × 0.50) + (KeySizeRisk × 0.20) + (TLSRisk × 0.20) + (ExpiryRisk × 0.10)
 ```
 
 ### Algorithm Vulnerability Scores

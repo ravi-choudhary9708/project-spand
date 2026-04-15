@@ -15,6 +15,8 @@ graph TD
     E -->|Fetch Tasks| F[Celery Worker]
     F -->|Analysis Results| D
     F -->|Target Discovery| G[External Intelligence]
+    C -->|Request Playbook| H[AI Remediation Engine]
+    H -->|Dual-Model Prompting| I[Hugging Face Router]
 ```
 
 ### Tech Stack
@@ -22,6 +24,7 @@ graph TD
 - **API Engine**: FastAPI / Pydantic (Asynchronous, Type-safe API)
 - **Task Queue**: Celery / Redis (Reliable background scanning)
 - **Persistence**: PostgreSQL / SQLAlchemy (Structured security data)
+- **AI Engine**: Hugging Face / Qwen 2.5 & Llama 3.1 (Intelligent remediation playbooks)
 - **Web Server**: Nginx (Load balancing & Static serving)
 
 ---
