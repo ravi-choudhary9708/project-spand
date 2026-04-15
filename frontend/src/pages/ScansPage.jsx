@@ -102,6 +102,11 @@ export default function ScansPage() {
           selectScan(updated);
         } else if (updated.progress !== selected.progress || updated.status !== selected.status || updated.current_step !== selected.current_step) {
           setSelected(updated);
+          // Fetch findings and assets live if progress changed while running
+          if (updated.status === 'RUNNING' || updated.status === 'PENDING') {
+            api.get(`/scans/${updated.scan_id}/findings`).then(r => setFindings(r.data)).catch(() => {});
+            api.get(`/scans/${updated.scan_id}/assets`).then(r => setAssets(r.data)).catch(() => {});
+          }
         }
       }
     }
