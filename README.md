@@ -1,12 +1,12 @@
-# 🔐 QuantumShield — Quantum-Proof Systems Scanner
+#  QuantumShield — Quantum-Proof Systems Scanner
 
-**PSB Hackathon 2026 | Team Spand | GEC Madhubani**
+**Team Spand | GEC Madhubani**
 
 > A tool that scans public-facing infrastructure for quantum cryptography vulnerabilities, generates CycloneDX CBOM reports, and maps findings to NIST PQC, RBI, and CERT-In compliance frameworks.
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ```bash
 # Clone the repo
@@ -32,7 +32,7 @@ http://localhost
 
 ---
 
-## 📚 Documentation & Deep Dives
+##  Documentation & Deep Dives
 
 For a comprehensive understanding of the system's internals, science, and compliance logic, refer to our detailed documentation suite in the [`docs/`](./docs/) directory:
 
@@ -47,7 +47,7 @@ For a comprehensive understanding of the system's internals, science, and compli
 
 ---
 
-## 🎯 What It Does
+##  What It Does
 
 QuantumShield scans your organization's public-facing domains and tells you:
 
@@ -59,7 +59,7 @@ QuantumShield scans your organization's public-facing domains and tells you:
 
 ---
 
-## 📊 Key Features
+##  Key Features
 
 | Feature | Description |
 |---------|-------------|
@@ -88,7 +88,7 @@ By default, the **"Full Organization Scan"** checkbox is checked. When you enter
 
 ### Custom URL Scan
 
-> **💡 To scan only a specific URL, uncheck the "Full Organization Scan" checkbox.**
+> ** To scan only a specific URL, uncheck the "Full Organization Scan" checkbox.**
 
 When unchecked, the scanner will **only scan the exact URL you provide** — no subdomain discovery. This is useful when:
 - You want to scan a single service like `aws.amazon.com`
@@ -97,7 +97,7 @@ When unchecked, the scanner will **only scan the exact URL you provide** — no 
 
 ---
 
-## 🔬 How the Scan Works — Complete Pipeline
+##  How the Scan Works — Complete Pipeline
 
 When you click "Start Scan" and enter a domain:
 
@@ -190,7 +190,7 @@ Creates a CycloneDX 1.4 JSON Cryptographic Bill of Materials with all findings.
 
 ---
 
-## 📐 HNDL Risk Score Formula (v2)
+##  HNDL Risk Score Formula (v2)
 
 ```text
 HNDL_final = min(10.0, BCS × W_sensitivity × M_shelf × M_pfs × M_tls_version)
@@ -249,7 +249,7 @@ BCS = (AlgoVuln × 0.50) + (KeySizeRisk × 0.20) + (TLSRisk × 0.20) + (ExpiryRi
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 Browser (React JS)
@@ -284,7 +284,7 @@ QuantumShield is engineered for enterprise-scale throughput:
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 project-spand/
@@ -336,7 +336,7 @@ project-spand/
 
 ---
 
-## 🛡️ Compliance Coverage
+##  Compliance Coverage
 
 | Framework | Controls Checked |
 |-----------|-----------------|
@@ -350,7 +350,7 @@ project-spand/
 
 ---
 
-## 🗄️ Database Schema
+##  Database Schema
 
 The system uses 9 PostgreSQL tables:
 
@@ -366,7 +366,7 @@ The system uses 9 PostgreSQL tables:
 
 ---
 
-## 🔑 API Endpoints
+##  API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -405,7 +405,7 @@ ENVIRONMENT=production
 
 ---
 
-## 🏃 Running Without Docker
+##  Running Without Docker
 
 ```bash
 # Install Python deps
@@ -428,7 +428,7 @@ Requires PostgreSQL and Redis running locally. Update `DATABASE_URL` and `REDIS_
 
 ---
 
-## 🔍 Competitive Advantage
+##  Competitive Advantage
 
 | Capability | Qualys SSL Labs | Venafi | Censys | QuantumShield |
 |-----------|:-:|:-:|:-:|:-:|
@@ -455,7 +455,7 @@ Requires PostgreSQL and Redis running locally. Update `DATABASE_URL` and `REDIS_
 
 ---
 
-## 📜 License
+##  License
 
 MIT License — open source, free to use and modify.
 
