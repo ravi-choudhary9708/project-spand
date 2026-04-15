@@ -280,6 +280,104 @@ def get_scan_assets(
     return result
 
 
+# ── GET /scans/{scan_id}/graph — Infrastructure topology graph data
+@router.get(
+    "/{scan_id}/graph",
+    summary="Get infrastructure graph data",
+    description="Returns nodes and links for an interactive force-directed infrastructure topology graph."
+)
+def get_scan_graph(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    scan = db.query(ScanJob).filter(ScanJob.scan_id == scan_id).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    assets = db.query(Asset).filter(Asset.scan_id == scan_id).all()
+
+    nodes = []
+    links = []
+    seen_ips = set()
+    seen_ports = set()
+
+    # Organization node (center)
+    org_id = f"org-{scan_id[:8]}"
+    nodes.append({
+        "id": org_id,
+        "label": scan.org_name,
+        "type": "organization",
+        "group": 0,
+    })
+
+    for a in assets:
+        # Domain node
+        domain_id = f"domain-{a.asset_id[:8]}"
+        certs = db.query(Certificate).filter(Certificate.asset_id == a.asset_id).all()
+        algo = certs[0].algorithm if certs else "Unknown"
+        key_size = certs[0].key_size if certs else 0
+
+        nodes.append({
+            "id": domain_id,
+            "label": a.domain,
+            "type": "domain",
+            "group": 1,
+            "hndl": round(a.hndl_score or 0, 1),
+            "protocol": a.protocol.value if hasattr(a.protocol, "value") else str(a.protocol),
+            "is_pqc": a.is_pqc,
+            "is_cdn": a.is_cdn,
+            "cdn_provider": a.cdn_provider,
+            "network_type": a.network_type or "public",
+            "service_category": a.service_category,
+            "algorithm": algo,
+            "key_size": key_size,
+            "scan_method": a.scan_method,
+            "pqc_readiness": a.pqc_readiness.value if a.pqc_readiness else "Vulnerable",
+        })
+        links.append({"source": org_id, "target": domain_id})
+
+        # IP nodes
+        for ip in (a.resolved_ips or []):
+            ip_id = f"ip-{ip}"
+            if ip_id not in seen_ips:
+                seen_ips.add(ip_id)
+                is_internal = any(ip.startswith(p) for p in [
+                    "10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
+                    "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
+                    "172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+                    "192.168.", "127."
+                ])
+                nodes.append({
+                    "id": ip_id,
+                    "label": ip,
+                    "type": "ip",
+                    "group": 2,
+                    "is_internal": is_internal,
+                    "is_cdn": a.is_cdn,
+                })
+            links.append({"source": domain_id, "target": ip_id})
+
+        # Port nodes
+        for port_info in (a.open_ports or []):
+            port_num = port_info.get("port") if isinstance(port_info, dict) else port_info
+            port_svc = port_info.get("service", "") if isinstance(port_info, dict) else ""
+            port_id = f"port-{port_num}"
+            if port_id not in seen_ports:
+                seen_ports.add(port_id)
+                is_tls = port_num in [443, 8443, 465, 993, 995, 990]
+                nodes.append({
+                    "id": port_id,
+                    "label": f":{port_num} {port_svc}".strip(),
+                    "type": "port",
+                    "group": 3,
+                    "is_tls": is_tls,
+                })
+            links.append({"source": domain_id, "target": port_id})
+
+    return {"nodes": nodes, "links": links}
+
+
 # ── GET /scans/{scan_id}/cbom — CycloneDX CBOM
 @router.get(
     "/{scan_id}/cbom", 

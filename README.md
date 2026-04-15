@@ -68,12 +68,12 @@ QuantumShield scans your organization's public-facing domains and tells you:
 | **HNDL Scoring** | Context-aware formula: BCS × Sensitivity × Shelf Life × PFS × TLS Version |
 | **CycloneDX CBOM** | Industry-standard Cryptographic Bill of Materials, exportable as JSON or XML |
 | **Compliance Mapping** | Automatic mapping to NIST FIPS 203/204/205, NIST IR 8547, RBI, CERT-In |
-| **AI Remediation** | Dynamic migration playbooks via Qwen 2.5 and Llama 3.1 with dual-engine fallback |
-| **Multi-protocol** | HTTPS, SMTP, IMAP, SSH, VPN, FTPS, DNS |
 | **Parallel Engine** | Hybrid architecture: 4 Celery workers × 5 Parallel Threads per scan |
 | **RBAC Dashboard** | 5 user roles — Admin, Analyst, Compliance, SOC, Management |
 | **CDN Detection** | Detects Cloudflare, Akamai, Fastly and attempts origin bypass via IP/SPF |
+| **Infra Node Graph** | Interactive network topology map with force-directed physics and HNDL heatmaps |
 | **Full Org / Custom URL** | Scan an entire organization or a single specific URL |
+| **AI Remediation** | Dynamic migration playbooks via Qwen 2.5 and Llama 3.1 with dual-engine fallback |
 
 ---
 
@@ -329,9 +329,10 @@ project-spand/
         └── pages/
             ├── DashboardPage.jsx   # HNDL charts, compliance heatmap
             ├── ScansPage.jsx       # Start scan, live progress
+            ├── InfraGraphPage.jsx  # Interactive force-directed topology
             ├── AssetsPage.jsx      # Asset inventory table
             ├── FindingsPage.jsx    # Vulnerabilities + playbooks
-            └── CBOMPage.jsx        # CycloneDX viewer + download
+            ├── CBOMPage.jsx        # CycloneDX viewer + download
 ```
 
 ---
@@ -381,6 +382,7 @@ The system uses 9 PostgreSQL tables:
 | GET | `/api/scans/{scan_id}` | Get scan status + progress |
 | GET | `/api/scans/{scan_id}/findings`| All findings for a scan |
 | GET | `/api/scans/{scan_id}/assets` | All assets for a scan |
+| GET | `/api/scans/{scan_id}/graph` | Nodes & links for topology graph |
 | GET | `/api/scans/{scan_id}/cbom` | CycloneDX CBOM for a scan |
 | DELETE| `/api/scans/{scan_id}` | Delete a scan (Admin only) |
 | GET | `/api/assets` | Asset inventory (filterable) |
