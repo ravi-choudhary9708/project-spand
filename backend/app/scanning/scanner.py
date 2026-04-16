@@ -1,15 +1,4 @@
-"""
-Scanning Engine - Main orchestrator
-Wraps Nmap, OpenSSL CLI, SSLyze, and Subfinder with a smart fallback to
-Python ssl module for environments where tools are unavailable.
 
-
-  - Real algorithm & key size extracted via `openssl s_client` + `openssl x509`
-  - Real issuer name extracted from certificate
-  - TLS scan runs on ALL TLS-capable ports (443, 8443, 465, 587, 993, 995, 990, etc.)
-  - UNKNOWN protocol domains still attempt TLS scan on any open port
-  - Cipher suite extracted via Python ssl interface (real negotiated cipher)
-"""
 import subprocess
 import concurrent.futures
 import time
@@ -56,12 +45,7 @@ _PRIVATE_NETWORKS = [
 ]
 
 def _is_internal_ip(ip: str) -> bool:
-    """
-    Returns True if ip is a private/reserved address (RFC 1918 / RFC 4193).
-    These addresses should never appear as the resolved IP of a public-facing
-    domain. If they do, it means the domain is internal-only and was discovered
-    via CT logs or subfinder from internal cert SANs.
-    """
+   
     try:
         addr = ipaddress.ip_address(ip)
         return any(addr in network for network in _PRIVATE_NETWORKS)
@@ -204,7 +188,7 @@ def _nmap_fallback(target: str) -> Dict[str, Any]:
             pass
         return None
 
-    # Check all ports concurrently — ~1.5s total instead of ~30s sequential
+    
     open_ports = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
         results = executor.map(_check_port, ports.items())
@@ -238,9 +222,7 @@ def _parse_nmap_output(output: str, target: str) -> Dict[str, Any]:
     return {"target": target, "open_ports": open_ports, "raw": output[:2000]}
 
 
-# ─────────────────────────────────────────
-# OPENSSL CLI - Real Algorithm & Key Size
-# ─────────────────────────────────────────
+
 
 def _openssl_available() -> bool:
     return is_tool_available("openssl")
@@ -864,14 +846,13 @@ def _sslyze_full_scan(
     return result
 
 
-# ─────────────────────────────────────────
 # TLS
-# ─────────────────────────────────────────
+
 
 # Ports to try when probing origin IPs for WAF/CDN bypass (kept small for speed)
 BYPASS_PORTS = [443]
 
-# Maximum seconds to spend on ALL bypass attempts per origin target
+
 _BYPASS_TIME_BUDGET = 25
 
 # CDN fingerprint headers — if ANY of these appear, we're still hitting an edge
@@ -960,7 +941,7 @@ def _http_probe_cdn_headers(
                 )
                 ssock.sendall(request.encode("utf-8"))
 
-                # Read response (up to 4KB — we only need the headers)
+               
                 response = b""
                 try:
                     while len(response) < 4096:
@@ -968,13 +949,12 @@ def _http_probe_cdn_headers(
                         if not chunk:
                             break
                         response += chunk
-                        # Stop once we have the full header block
+                       
                         if b"\r\n\r\n" in response:
                             break
                 except socket.timeout:
                     pass
 
-                # Parse headers from HTTP response
                 text = response.decode("utf-8", errors="ignore")
                 header_block = text.split("\r\n\r\n", 1)[0]
                 for line in header_block.split("\r\n")[1:]:  # skip status line
@@ -1085,7 +1065,6 @@ def _try_bypass_on_port(
 
     logger.info(f"[origin-bypass] {sni_domain} via {origin_target}:{port}")
 
-    # ── Quick TCP pre-check: skip if port is unreachable ──────────────────────
     try:
         pre_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         pre_sock.settimeout(3)
@@ -1258,10 +1237,7 @@ def _infer_from_cipher_and_issuer(
     cu = cipher_name.upper()
     iu = issuer_str.upper()
 
-    # ── Fix 6: TLS 1.3 suites don't encode key exchange or auth algo ──────
-    # TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256, etc.
-    # Auth algo comes from the cert, not the cipher suite name.
-    # Fall through to issuer-based inference instead of returning wrong default.
+   
     if cu.startswith("TLS_AES_") or cu.startswith("TLS_CHACHA20_"):
         pass  # skip cipher-based inference, use issuer below
     elif "ECDHE_ECDSA" in cu or "ECDH_ECDSA" in cu:
@@ -2085,9 +2061,9 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
     return result
 
 
-# ─────────────────────────────────────────
+
 # HELPERS
-# ─────────────────────────────────────────
+
 
 def _detect_cdn(domain: str, ip: str) -> Tuple[bool, Optional[str]]:
     # 1. Check HTTP response headers (most reliable)
