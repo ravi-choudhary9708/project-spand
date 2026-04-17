@@ -2108,6 +2108,9 @@ def _map_header_to_cdn(header: str, value: str) -> str:
 
 def _extract_key_exchange(cipher_name: str) -> str:
     name = cipher_name.upper()
+    # TLS 1.3 ciphers mandate ephemeral key exchange (ECDHE/DHE) implicitly
+    if name.startswith("TLS_AES_") or name.startswith("TLS_CHACHA20_"):
+        return "ECDHE"
     if "ECDHE" in name:
         return "ECDHE"
     if "DHE" in name:
