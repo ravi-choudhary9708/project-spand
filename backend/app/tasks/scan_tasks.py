@@ -308,13 +308,27 @@ def _scan_single_domain(domain: str, scan_id: str, profile: dict) -> Optional[di
 
         # Scoring
         tls_version_str = tls_data.get("tls_version")
+        tls_cipher_str  = tls_data.get("cipher_suite")
+        
+        # Fallback: if negotiated cipher/version is missing but we have an enumerated list
+        if (not tls_version_str or not tls_cipher_str) and scan_data.get("cipher_suites"):
+            sorted_suites = sorted(
+                scan_data["cipher_suites"], 
+                key=lambda x: str(x.get("tls_version", "")), 
+                reverse=True
+            )
+            if not tls_version_str:
+                tls_version_str = sorted_suites[0].get("tls_version")
+            if not tls_cipher_str:
+                tls_cipher_str = sorted_suites[0].get("name")
+
         asset_hndl_result = calculate_hndl_score(
             algorithm        = final_algo,
             key_size         = final_key_size,
             domain           = domain,                          # v2: keyword-based sensitivity
             expires_at       = expires_at,
             tls_version      = tls_version_str,
-            cipher_suite     = tls_data.get("cipher_suite"),   # v2: PFS detection
+            cipher_suite     = tls_cipher_str,                  # v2: PFS detection
             service_category = _get_service_category(protocol, domain, scan_data.get("server_software")),
         )
         asset_hndl = asset_hndl_result[0] if isinstance(asset_hndl_result, tuple) else asset_hndl_result
