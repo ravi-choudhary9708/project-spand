@@ -847,15 +847,18 @@ def _get_service_category(p: str, domain: str = "", server: str = None) -> str:
     if any(x in s_lower for x in ["cloudflare", "akamai", "cloudfront", "f5", "citrix"]):
         return "load_balancer"
 
-    # 3. Web Servers
+    # 3. Mail Servers (check before Web Servers)
+    if p_upper in ["SMTP", "IMAP", "POP3"]:
+        return "mail_server"
+    if any(x in d_lower for x in ["mail", "smtp", "imap", "pop3", "webmail", "exchange"]):
+        return "mail_server"
+
+    # 4. Web Servers
     if p_upper in ["HTTPS", "HTTP"]:
         return "web_server"
 
-    # 4. Others
+    # 5. Others
     mapping = {
-        "SMTP":  "mail_server",
-        "IMAP":  "mail_server",
-        "POP3":  "mail_server",
         "FTPS":  "file_transfer",
         "SSH":   "remote_access",
         "VPN":   "vpn_gateway",
