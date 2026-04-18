@@ -150,7 +150,7 @@ def run_nmap_scan(target: str) -> Dict[str, Any]:
     # Detect if target is IPv6
     is_ipv6 = ":" in target and not target.startswith("[")
     
-    cmd = ["nmap", "-sS", "-T4", "--top-ports", "1000", "-n", "-Pn", "--open", "--min-rate", "1000"]
+    cmd = ["nmap", "-sS", "-T4", "-p", ports, "-n", "-Pn", "--open", "--min-rate", "1000"]
     if is_ipv6:
         cmd.append("-6")
     cmd.append(target)
