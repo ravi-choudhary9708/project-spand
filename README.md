@@ -56,6 +56,7 @@ QuantumShield scans your organization's public-facing domains and tells you:
 3. **Which compliance frameworks you are violating** (NIST FIPS 203/204/205, RBI, CERT-In)
 4. **Exactly what to do to fix it** via step-by-step remediation playbooks
 5. **A complete Cryptographic Bill of Materials (CBOM)** in CycloneDX 1.4 format
+6. **Executive-ready security reports** with interactive drill-downs and print-ready exports
 
 ---
 
@@ -74,6 +75,7 @@ QuantumShield scans your organization's public-facing domains and tells you:
 | **Infra Node Graph** | Interactive network topology map with force-directed physics and HNDL heatmaps |
 | **Full Org / Custom URL** | Scan an entire organization or a single specific URL |
 | **AI Remediation** | Dynamic migration playbooks via Qwen 2.5 and Llama 3.1 with dual-engine fallback |
+| **Security Reporting** | Comprehensive, print-ready reports with interactive drill-down analysis |
 
 ---
 
@@ -110,6 +112,22 @@ QuantumShield includes a state-of-the-art **Interactive Topology Map** that visu
     - **Radial Tiers**: Concentric rings showing logical distance from the core.
     - **Cluster**: Grouped by asset type into optimized quadrants.
 - **Deep Interactivity**: Link distance sliders, type-based filtering, and pin-to-drag node manipulation.
+
+---
+
+## 📄 Comprehensive Security Reporting
+
+QuantumShield features a premium reporting engine designed for both technical teams and executive stakeholders (CISO/Board level).
+
+### Key Reporting Features:
+- **Executive Summary & Risk Gauge**: Instant visualization of the organization's average HNDL score and PQC readiness.
+- **Interactive Drill-Downs**: Every card and chart segment is clickable.
+    - Click **Severity Cards** to see a list of specific critical/high findings.
+    - Click **Algorithm Bars** to see which assets are using vulnerable RSA or ECDSA keys.
+    - Click **Compliance Rows** to view the exact rules being violated.
+- **Risk Distribution Analysis**: Visual breakdown of finding severity, PQC status, and cryptographic algorithm spread.
+- **Compliance Status Matrix**: Real-time mapping against NIST-PQC, RBI, and CERT-In frameworks with violation counts.
+- **Print-Ready (A4 Optimized)**: A dedicated print stylesheet ensures reports are beautifully formatted for PDF export or physical printing (hides navigation, optimizes background for white paper).
 
 ---
 
@@ -348,6 +366,7 @@ project-spand/
             ├── InfraGraphPage.jsx  # Interactive force-directed topology
             ├── AssetsPage.jsx      # Asset inventory table
             ├── FindingsPage.jsx    # Vulnerabilities + playbooks
+            ├── ReportsPage.jsx     # Executive reporting + interactive drill-downs
             ├── CBOMPage.jsx        # CycloneDX viewer + download
 ```
 
