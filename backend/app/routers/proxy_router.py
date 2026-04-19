@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.models.models import Asset, Certificate
+from app.models.models import Asset, Certificate, UserRole
 from app.auth.auth import get_current_user, require_roles
 from app.engines.pqc_proxy_generator import generate_proxy_config_zip
 import logging
@@ -39,7 +39,7 @@ on the outside and forwards Classical TLS/HTTP to the legacy backend internally.
 async def generate_proxy_config(
     asset_id: str,
     db: Session = Depends(get_db),
-    current_user=Depends(require_roles("ADMIN", "SECURITY_ANALYST")),
+    current_user=Depends(require_roles(UserRole.ADMIN, UserRole.SECURITY_ANALYST)),
 ):
     # Look up the asset
     asset = db.query(Asset).filter(Asset.asset_id == asset_id).first()

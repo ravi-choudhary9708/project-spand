@@ -57,6 +57,7 @@ REMEDIATION_PLAYBOOKS = {
             "4. Plan full migration to ML-KEM for quantum-safe key exchange.",
             "5. Update cipher suite priority to disable DHE and prefer ML-KEM groups.",
         ],
+        "detailed_report": "DEEP DIVE (DH/DHE): Diffie-Hellman (DH) key exchange is vulnerable to the Logjam attack classically and Shor's algorithm quantumly. \n\nMIGRATION STEPS FOR {domain}:\n- Transitional: Move to FFDHE (Finite Field DH) groups with 3072-bit or higher primes.\n- Hybrid: The IETF CRL-KEM draft recommends pairing DH with Kyber-768.\n- Long-term: Complete removal of DH in favor of ML-KEM is the only way to reach full quantum safety."
     },
     "TLS_OUTDATED": {
         "title": "Upgrade TLS Protocol Version",
@@ -71,6 +72,7 @@ REMEDIATION_PLAYBOOKS = {
             "6. Add HSTS headers (Strict-Transport-Security) to prevent downgrade attacks.",
             "7. Submit domain to HSTS preload list for maximum protection.",
         ],
+        "detailed_report": "PROTOCOL ARCHITECTURE: Outdated TLS versions (1.0, 1.1) lack forward secrecy and are vulnerable to multiple side-channel attacks. \n\nUPGRADE PATH FOR {domain}:\n- Standard: Enforce TLS 1.3 only. This removes legacy ciphers and simplifies the handshake.\n- Quantum Safety: TLS 1.3 is the only protocol version capable of supporting NIST's Post-Quantum Cryptography (PQC) extensions natively via the 'Groups' extension.\n- Compatibility: Ensure client libraries (Java 11+, OpenSSL 1.1.1+, BoringSSL) are up to date."
     },
     "WEAK_CIPHER": {
         "title": "Replace Weak Cipher Suites",
@@ -84,6 +86,7 @@ REMEDIATION_PLAYBOOKS = {
             "5. Prefer cipher suites with forward secrecy: ECDHE-* or DHE-* prefix.",
             "6. Validate changes with SSLyze and testssl.sh after deployment.",
         ],
+        "detailed_report": "CIPHER ANALYSIS: Weak ciphers lack Authenticated Encryption (AEAD) and are susceptible to bit-flipping and padding oracle attacks. \n\nREMEDIATION FOR {domain}:\n- Preferred: AES-256-GCM (Hardware accelerated) or ChaCha20-Poly1305 (Software efficient).\n- Future: Prepare for AES-GCM with PQC key encapsulation. While the cipher itself is classically strong, its keys are vulnerable to quantum theft today (HNDL)."
     },
     "EXPIRED_CERT": {
         "title": "Renew Expired Certificate — Immediate Action Required",
@@ -96,6 +99,7 @@ REMEDIATION_PLAYBOOKS = {
             "4. Configure monitoring alerts at 30, 14, and 7 days before expiry.",
             "5. Validate renewed certificate is properly deployed and trusted on all servers.",
         ],
+        "detailed_report": "CERTIFICATE BLOCKER: The expired certificate on {domain} has completely compromised the availability and trust of the service. \n\nACTION PLAN:\n- Immediate: Generate a new CSR and re-issue. \n- Automation: Implement Certbot/ACME to eliminate manual renewal risks.\n- PQC Readiness: When re-issuing, use a modern provider like Entrust or DigiCert that offers PQC/Classical Hybrid roots (ML-DSA)."
     },
 }
 
@@ -293,11 +297,14 @@ STRICT FORMAT: Respond in valid JSON ONLY. Double quotes inside strings MUST be 
         result = try_ai_call("meta-llama/Llama-3.1-8B-Instruct", headers, system_msg, user_msg, domain_name)
 
     if result:
+        result["status"] = "AI_GENERATED"
         return result
 
     # Final fallback to static guidance
     logger.warning("All AI models failed or returned empty data. Reverting to expert static blueprints.")
-    return get_remediation_playbook(finding_type, algorithm, domain_name)
+    fallback = get_remediation_playbook(finding_type, algorithm, domain_name)
+    fallback["status"] = "STATIC_FALLBACK"
+    return fallback
 
 
 def calculate_priority_score(hndl_score: float, asset_criticality: float = 5.0) -> float:

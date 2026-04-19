@@ -182,6 +182,7 @@ def get_scan_findings(
                     "priority":        r.priority,
                     "pqc_alternative": r.pqc_alternative,
                     "status":          r.status,
+                    "detailed_report": r.detailed_report,
                 }
                 for r in (f.remediation_plan or [])
             ]
@@ -464,7 +465,7 @@ def generate_ai_remediation(
         remedy.priority = playbook.get("priority", remedy.priority)
         remedy.pqc_alternative = playbook.get("pqc_alternative", remedy.pqc_alternative)
         remedy.detailed_report = playbook.get("detailed_report", "")
-        remedy.status = "AI_GENERATED"
+        remedy.status = playbook.get("status", "AI_GENERATED")
     else:
         remedy = Remediation(
             playbook_id=str(uuid.uuid4()), 
@@ -473,7 +474,7 @@ def generate_ai_remediation(
             steps=playbook.get("steps", []), 
             pqc_alternative=playbook.get("pqc_alternative", ""),
             detailed_report=playbook.get("detailed_report", ""),
-            status="AI_GENERATED"
+            status=playbook.get("status", "AI_GENERATED")
         )
         db.add(remedy)
     

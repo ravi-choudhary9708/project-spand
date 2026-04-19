@@ -139,7 +139,7 @@ def _serialize_suite(s: CipherSuite) -> dict:
 
 def _serialize_finding(f: Finding) -> dict:
     tags = [{"framework": t.framework, "control_ref": t.control_ref, "status": t.status.value} for t in f.compliance_tags]
-    playbooks = [{"steps": r.steps, "priority": r.priority, "pqc_alternative": r.pqc_alternative} for r in f.remediation_plan]
+    playbooks = [{"steps": r.steps, "priority": r.priority, "pqc_alternative": r.pqc_alternative, "detailed_report": r.detailed_report, "status": r.status} for r in f.remediation_plan]
     return {
         "finding_id": f.finding_id,
         "type": f.type.value,

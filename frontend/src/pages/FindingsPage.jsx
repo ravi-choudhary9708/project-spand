@@ -203,7 +203,12 @@ export default function FindingsPage() {
                       <div style={{ fontSize: 10, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Quantum-Cloud Intelligence</div>
                     </div>
                   </div>
-                  {(!selected.remediation_plan || !selected.remediation_plan[0]?.detailed_report) ? (
+                  {selected.remediation_plan?.[0]?.status === 'STATIC_FALLBACK' && (
+                    <div style={{ fontSize: 9, color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '4px 10px', borderRadius: 20, border: '1px solid rgba(245,158,11,0.3)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      ⚠️ AI API Key Expired/Failed - Showing Expert Fallback
+                    </div>
+                  )}
+                  {(!selected.remediation_plan || (!selected.remediation_plan[0]?.detailed_report && selected.remediation_plan[0]?.status !== 'STATIC_FALLBACK')) ? (
                     <button 
                       className="btn btn-primary" 
                       style={{ fontSize: 11, padding: '6px 14px', borderRadius: 20, background: 'linear-gradient(135deg, var(--accent-cyan), #00a8ff)', border: 'none' }} 
@@ -224,11 +229,14 @@ export default function FindingsPage() {
                       onClick={() => {
                         // To force regeneration, we would normally need an API flag, 
                         // but for now we'll just let the current button serve as a 'view' unless we add a clear logic
-                        // In this case, I'll just keep the detailed report.
+                        // In this case, we'll allow regeneration if it was a fallback
+                        if (selected.remediation_plan[0]?.status === 'STATIC_FALLBACK') {
+                           generateAiRemediation(selectedScan, selected.finding_id);
+                        }
                       }}
-                      disabled={true}
+                      disabled={selected.remediation_plan[0]?.status === 'AI_GENERATED'}
                     >
-                      ✅ Blueprint Active
+                      {selected.remediation_plan[0]?.status === 'AI_GENERATED' ? '✅ Blueprint Active' : '🔄 Retry AI Generation'}
                     </button>
                   )}
                 </div>
