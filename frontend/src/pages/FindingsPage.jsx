@@ -151,6 +151,40 @@ export default function FindingsPage() {
                 </div>
               )}
 
+              {/* PQC Sidecar Proxy — Instant Fix */}
+              {(selected.type === 'QUANTUM_VULNERABLE_ALGORITHM' || (selected.hndl_score && selected.hndl_score >= 5.0)) && selected.asset_id && (
+                <div style={{
+                  marginBottom: 16, padding: 14,
+                  background: 'linear-gradient(135deg, rgba(139,92,246,0.08), rgba(0,212,255,0.05))',
+                  border: '1px solid rgba(139,92,246,0.2)', borderRadius: 10,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span>🛡️</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa' }}>INSTANT FIX: PQC SIDECAR PROXY</span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10, lineHeight: 1.5 }}>
+                    Deploy a quantum-safe TLS wrapper for <strong style={{ color: 'var(--accent-cyan)' }}>{selected.asset_domain}</strong> without modifying legacy code. Neutralize HNDL threat in 5 minutes.
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    style={{ fontSize: 10, padding: '6px 14px', borderRadius: 8, background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)', border: 'none', fontWeight: 700 }}
+                    onClick={async () => {
+                      try {
+                        const res = await api.get(`/proxy/generate/${selected.asset_id}`, { responseType: 'blob' })
+                        const url = URL.createObjectURL(res.data)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `pqc-proxy-${(selected.asset_domain || 'asset').replace(/\./g, '-')}.zip`
+                        a.click()
+                        URL.revokeObjectURL(url)
+                      } catch { alert('Failed to generate PQC config.') }
+                    }}
+                  >
+                    ⬇️ Generate PQC Wrapper Config
+                  </button>
+                </div>
+              )}
+
               {/* AI Remediati              {/* AI Remediation Card */}
               <div style={{ 
                 background: 'rgba(0,212,255,0.03)', 

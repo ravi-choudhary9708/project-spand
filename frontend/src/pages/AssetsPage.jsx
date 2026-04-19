@@ -257,6 +257,58 @@ function AssetDetail({ asset, onClose }) {
           {asset.cipher_suites.map((s, i) => <CipherRow key={s.suite_id || i} s={s} />)}
         </div>
       )}
+
+      {/* PQC Proxy Wrapper — only for quantum-vulnerable assets */}
+      {(() => {
+        const algo = (asset.certificates?.[0]?.algorithm || asset.algorithm || '').toUpperCase()
+        const isVuln = /RSA|ECDSA|ECC|DHE|DH\b|DSA|ECDHE/.test(algo)
+        if (!isVuln) return null
+        return (
+          <div style={{
+            marginTop: 16, padding: 16,
+            background: 'linear-gradient(135deg, rgba(139,92,246,0.08), rgba(0,212,255,0.05))',
+            border: '1px solid rgba(139,92,246,0.2)',
+            borderRadius: 12,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 18 }}>🛡️</span>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>PQC SIDECAR PROXY</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>Deploy quantum-safe wrapper without changing legacy code</div>
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.6 }}>
+              Generate a ready-to-deploy Docker config that wraps <strong>{asset.domain}</strong> in ML-KEM (Kyber) TLS termination.
+              The legacy server stays untouched.
+            </div>
+            <button
+              className="btn btn-primary"
+              style={{
+                fontSize: 11, padding: '8px 16px', borderRadius: 8, width: '100%',
+                background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
+                border: 'none', fontWeight: 700,
+              }}
+              onClick={async (e) => {
+                e.stopPropagation()
+                try {
+                  const res = await api.get(`/proxy/generate/${asset.asset_id}`, { responseType: 'blob' })
+                  const url = URL.createObjectURL(res.data)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `pqc-proxy-${asset.domain.replace(/\./g, '-')}.zip`
+                  a.click()
+                  URL.revokeObjectURL(url)
+                } catch (err) {
+                  console.error('Failed to generate PQC config:', err)
+                  alert('Failed to generate PQC proxy config. Check permissions.')
+                }
+              }}
+            >
+              ⬇️ Download PQC Proxy Config
+            </button>
+          </div>
+        )
+      })()}
     </div>
   )
 }

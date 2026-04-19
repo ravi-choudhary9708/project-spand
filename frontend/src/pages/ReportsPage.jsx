@@ -614,6 +614,86 @@ export default function ReportsPage() {
             </div>
           </div>
 
+          {/* ══ 8. PQC SIDECAR PROXY ═══════════════════════════════ */}
+          {(() => {
+            const vulnAssets = assets.filter((a) => {
+              const algo = (a.certificates?.[0]?.algorithm || a.algorithm || "").toUpperCase();
+              return /RSA|ECDSA|ECC|DHE|DH\b|DSA|ECDHE/.test(algo);
+            });
+            if (vulnAssets.length === 0) return null;
+            return (
+              <div className="report-section no-print" style={{ marginTop: 28 }}>
+                <SectionHeader
+                  number={Object.keys(complianceMap).length > 0 ? "07" : "06"}
+                  title="PQC Sidecar Proxy"
+                  subtitle={`Deploy quantum-safe wrappers for ${vulnAssets.length} vulnerable asset(s)`}
+                />
+                <div style={{
+                  background: "linear-gradient(135deg, rgba(139,92,246,0.06), rgba(0,212,255,0.04))",
+                  border: "1px solid rgba(139,92,246,0.2)", borderRadius: 14,
+                  padding: "20px 24px", marginBottom: 16,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                    <span style={{ fontSize: 22 }}>🛡️</span>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#a78bfa" }}>Cryptographic Bridge Technology</div>
+                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        Wrap legacy servers in Quantum-Safe TLS (ML-KEM / Kyber) without modifying backend code
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.7, marginBottom: 16 }}>
+                    Each config generates a <strong>Docker + Nginx</strong> deployment package using the <strong>Open Quantum Safe (OQS)</strong> project's
+                    pre-built PQC image. The proxy terminates quantum-safe TLS on the outside and forwards classical HTTP to your legacy backend.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {vulnAssets.slice(0, 10).map((a) => {
+                      const algo = a.certificates?.[0]?.algorithm || a.algorithm || "RSA";
+                      return (
+                        <div key={a.asset_id} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          padding: "10px 14px", background: "rgba(0,0,0,0.2)",
+                          border: "1px solid rgba(255,255,255,0.06)", borderRadius: 8,
+                        }}>
+                          <div>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>{a.domain}</div>
+                            <div style={{ fontSize: 10, color: "#ef4444" }}>{algo} → ML-KEM-768</div>
+                          </div>
+                          <button
+                            className="btn btn-primary"
+                            style={{
+                              fontSize: 9, padding: "5px 10px", borderRadius: 6,
+                              background: "linear-gradient(135deg, #8b5cf6, #3b82f6)",
+                              border: "none", fontWeight: 700, whiteSpace: "nowrap",
+                            }}
+                            onClick={async () => {
+                              try {
+                                const res = await api.get(`/proxy/generate/${a.asset_id}`, { responseType: "blob" });
+                                const url = URL.createObjectURL(res.data);
+                                const el = document.createElement("a");
+                                el.href = url;
+                                el.download = `pqc-proxy-${a.domain.replace(/\./g, "-")}.zip`;
+                                el.click();
+                                URL.revokeObjectURL(url);
+                              } catch { alert("Failed to generate config."); }
+                            }}
+                          >
+                            ⬇️ Config
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {vulnAssets.length > 10 && (
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 10, textAlign: "center" }}>
+                      + {vulnAssets.length - 10} more vulnerable assets. Use the Assets page for full access.
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* ══ FOOTER ═══════════════════════════════════════════════ */}
           <div className="report-section" style={{ marginTop: 40, paddingBottom: 20 }}>
             <div style={{ height: 1, background: "linear-gradient(90deg, transparent 0%, var(--accent-cyan) 50%, transparent 100%)", opacity: 0.3, marginBottom: 16 }} />
