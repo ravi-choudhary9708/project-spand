@@ -10,7 +10,7 @@ from app.config import settings
 from app.database import engine, SessionLocal, Base
 from app.models.models import User, UserRole
 from app.auth.auth import get_password_hash
-from app.routers import auth_router, scans_router, dashboard_router, assets_router
+from app.routers import auth_router, scans_router, dashboard_router, assets_router, proxy_router
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -96,6 +96,7 @@ app.include_router(auth_router)
 app.include_router(scans_router)
 app.include_router(dashboard_router)
 app.include_router(assets_router)
+app.include_router(proxy_router)
 
 
 @app.get("/api/health")
