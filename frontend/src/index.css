@@ -494,3 +494,149 @@ tr:hover td { background: rgba(255,255,255,0.02); }
 .info-row:last-child { border-bottom: none; }
 .info-row .label { color: var(--text-muted); }
 .info-row .value { font-weight: 600; }
+
+/* ─── REPORT PAGE ────────────────────────────────────── */
+.report-container {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.report-section {
+  margin-bottom: 8px;
+}
+
+/* ─── PRINT STYLES ───────────────────────────────────── */
+@media print {
+  /* Hide interactive chrome */
+  .no-print,
+  .report-controls,
+  aside,
+  nav,
+  .sidebar,
+  button,
+  select,
+  input,
+  .btn,
+  .page-header {
+    display: none !important;
+  }
+
+  /* ★ FIX: Override the inline height:100vh + overflow:hidden on the
+     layout container and the overflow:auto on <main>. These two inline
+     styles are what clip the print output to a single viewport. */
+  html, body {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #1a1a2e !important;
+  }
+
+  .qs-app-layout {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    display: block !important;
+    background: #fff !important;
+  }
+
+  .qs-main-content {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin-left: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  .report-container,
+  .report-section,
+  .scroll-fade,
+  .table-wrapper,
+  #report-content {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #1a1a2e !important;
+  }
+
+  .report-container {
+    max-width: 100% !important;
+    padding: 0 20px !important;
+  }
+
+  /* Cards for print */
+  .card {
+    background: #f8f9fa !important;
+    border: 1px solid #dee2e6 !important;
+    box-shadow: none !important;
+    color: #1a1a2e !important;
+    overflow: visible !important;
+  }
+
+  .report-cover {
+    background: #f0f4ff !important;
+    border: 2px solid #3b82f6 !important;
+    box-shadow: none !important;
+  }
+
+  /* Text colors for print */
+  h1, h2, h3, h4, h5, h6,
+  .page-title,
+  .card-title,
+  td, th {
+    color: #1a1a2e !important;
+    -webkit-text-fill-color: #1a1a2e !important;
+    background: none !important;
+  }
+
+  p, span {
+    color: #333 !important;
+  }
+
+  /* Badges print */
+  .badge {
+    border: 1px solid currentColor !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .badge-critical { background: rgba(239,68,68,0.15) !important; color: #c0392b !important; }
+  .badge-high { background: rgba(249,115,22,0.15) !important; color: #d35400 !important; }
+  .badge-medium { background: rgba(245,158,11,0.15) !important; color: #e67e22 !important; }
+  .badge-low, .badge-safe { background: rgba(16,185,129,0.15) !important; color: #27ae60 !important; }
+
+  /* Tables */
+  table { font-size: 11px !important; }
+  th { background: #e9ecef !important; }
+  td { border-bottom: 1px solid #dee2e6 !important; }
+
+  /* Allow tables to split across pages */
+  table, tbody, tr {
+    page-break-inside: auto !important;
+    break-inside: auto !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  /* Section page breaks */
+  .report-section {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  @page {
+    margin: 1.5cm;
+    size: A4;
+  }
+
+  /* Charts — preserve colors */
+  svg {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+}
+

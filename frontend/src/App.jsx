@@ -20,6 +20,7 @@ import FindingsPage     from "./pages/FindingsPage";
 import CBOMPage         from "./pages/CBOMPage";
 import InfraGraphPage   from "./pages/InfraGraphPage";
 import LoginPage        from "./pages/LoginPage";
+import ReportsPage      from "./pages/ReportsPage";
 
 // ─── Auth Context ────────────────────────────────────────────────────────────
 const AuthContext = createContext(null);
@@ -95,6 +96,12 @@ const NAV_ITEMS = [
     label: "Graph",
     icon: "🕸️",
     roles: ["ADMIN", "SECURITY_ANALYST", "SOC_TEAM"],
+  },
+  {
+    to: "/reports",
+    label: "Reports",
+    icon: "📄",
+    roles: ["ADMIN", "SECURITY_ANALYST", "COMPLIANCE_OFFICER", "SOC_TEAM", "MANAGEMENT"],
   },
 ];
 
@@ -238,9 +245,9 @@ function AppLayout() {
   const role = user.role;
 
   return (
-    <div style={styles.appLayout}>
+    <div className="qs-app-layout" style={styles.appLayout}>
       <Sidebar />
-      <main style={styles.mainContent}>
+      <main className="qs-main-content" style={styles.mainContent}>
         <Routes>
           {/* Dashboard — all roles */}
           <Route
@@ -300,6 +307,16 @@ function AppLayout() {
             element={
               <ProtectedRoute allowedRoles={["ADMIN","SECURITY_ANALYST","SOC_TEAM"]}>
                 <InfraGraphPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Reports — All roles */}
+          <Route
+            path="/reports"
+            element={
+              <ProtectedRoute allowedRoles={["ADMIN","SECURITY_ANALYST","COMPLIANCE_OFFICER","SOC_TEAM","MANAGEMENT"]}>
+                <ReportsPage />
               </ProtectedRoute>
             }
           />
