@@ -131,6 +131,35 @@ QuantumShield features a premium reporting engine designed for both technical te
 
 ---
 
+## 🛡️ PQC Sidecar Proxy — "Cryptographic Bridge"
+
+QuantumShield doesn't just detect vulnerabilities — it can **deploy an instant fix**. The PQC Sidecar Proxy wraps legacy servers in a quantum-safe TLS termination layer without modifying any backend code.
+
+### How It Works
+```
+Internet (Quantum Attacker)
+      │
+      ▼
+┌─────────────────────┐
+│  PQC Sidecar Proxy  │  Port 443
+│  TLS 1.3 + ML-KEM   │  ← Quantum Safe
+└──────────┬──────────┘
+           │ HTTP (internal)
+┌──────────▼──────────┐
+│   Legacy Server     │  RSA-2048
+│   (Untouched)       │  ← Zero Changes
+└─────────────────────┘
+```
+
+### Key Capabilities
+- **One-Click Config Generation**: Click "Generate PQC Wrapper" on any vulnerable asset to download a ready-to-deploy Docker config.
+- **OQS Nginx**: Uses the [Open Quantum Safe](https://openquantumsafe.org/) project's pre-built, battle-tested PQC image.
+- **Algorithm Mapping**: Automatically maps RSA → ML-KEM-768, ECDSA → ML-DSA-65, DHE → ML-KEM-1024.
+- **Complete Package**: Downloads include `docker-compose.yml`, `nginx-pqc.conf`, cert generation script, and deployment README.
+- **Available Everywhere**: Buttons appear on the Assets page, Findings detail panel, and Reports page.
+
+---
+
 ##  How the Scan Works — Complete Pipeline
 
 When you click "Start Scan" and enter a domain:
