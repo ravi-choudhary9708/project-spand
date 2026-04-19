@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import api from '../api/client'
 import toast from 'react-hot-toast'
+import OnboardingHint from '../components/OnboardingHint'
 
 /* ── Helpers ───────────────────────────────────────────────────── */
 
@@ -260,6 +261,18 @@ export default function CBOMPage() {
           </div>
         </>
       )}
+
+      <OnboardingHint
+        hintKey="cbom"
+        icon="📜"
+        title="CBOM Viewer"
+        tips={[
+          { icon: '📂', text: 'Select a completed scan from the dropdown to load its Cryptographic Bill of Materials (CycloneDX).' },
+          { icon: '▶️', text: 'Click any component row to expand its cipher suite list — see exact key-exchange algorithms and PQC status.' },
+          { icon: '⬇️', text: 'Download the CBOM as JSON or XML for submission to compliance audits or third-party SCA tools.' },
+          { icon: '🔢', text: 'The Overall HNDL score at the top is a single quantum-risk number across all discovered assets.' },
+        ]}
+      />
     </div>
   )
 }

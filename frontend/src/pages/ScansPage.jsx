@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import api from '../api/client'
 import toast from 'react-hot-toast'
+import OnboardingHint from '../components/OnboardingHint'
 
 function ScanStatusBadge({ status }) {
   const map = { COMPLETED: 'badge-safe', RUNNING: 'badge-medium', FAILED: 'badge-critical', PENDING: 'badge-info', CANCELLED: 'badge-info' }
@@ -280,6 +281,18 @@ export default function ScansPage() {
           )}
         </div>
       )}
+
+      <OnboardingHint
+        hintKey="scans"
+        icon="🔍"
+        title="Scan Management"
+        tips={[
+          { icon: '▶️', text: 'Click any row to open real-time findings and asset profiles for that scan.' },
+          { icon: '➕', text: 'Hit "New Scan" — enter a domain and QuantumShield auto-discovers subdomains, CT logs and SPF records.' },
+          { icon: '📈', text: 'Watch progress live. The scan bar updates every 5 s without refreshing.' },
+          { icon: '📄', text: 'When a scan completes, click "CBOM" to export a CycloneDX Cryptographic Bill of Materials.' },
+        ]}
+      />
     </div>
   )
 }

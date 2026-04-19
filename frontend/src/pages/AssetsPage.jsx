@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import api from '../api/client'
+import OnboardingHint from '../components/OnboardingHint'
 
 /* ── Helpers ─────────────────────────────────────────── */
 function HNDLBar({ score }) {
@@ -497,6 +498,18 @@ export default function AssetsPage() {
           <AssetDetail asset={selected} onClose={() => setSelected(null)} />
         )}
       </div>
+
+      <OnboardingHint
+        hintKey="assets"
+        icon="🗂️"
+        title="Asset Inventory"
+        tips={[
+          { icon: '▶️', text: 'Click any asset row to open its full cryptographic profile — certificates, cipher suites and port map.' },
+          { icon: '🟥', text: 'The HNDL bar goes red when RSA/ECC keys are short-lived or high-sensitivity. Prioritise those first.' },
+          { icon: '🛡️', text: 'On a vulnerable asset, scroll the detail panel to find "Generate PQC Wrapper" and download a Docker sidecar config.' },
+          { icon: '🔍', text: 'Use the search box and the Algorithm / PQC / CDN dropdowns to slice the inventory.' },
+        ]}
+      />
     </div>
   )
 }

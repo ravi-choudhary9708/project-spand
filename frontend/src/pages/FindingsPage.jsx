@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import api from '../api/client'
 import toast from 'react-hot-toast'
+import OnboardingHint from '../components/OnboardingHint'
 
 export default function FindingsPage() {
   const [scans, setScans] = useState([])
@@ -457,6 +458,18 @@ export default function FindingsPage() {
           )}
         </div>
       )}
+
+      <OnboardingHint
+        hintKey="findings"
+        icon="🔎"
+        title="Findings Explorer"
+        tips={[
+          { icon: '▶️', text: 'Click any finding row to open its detail panel — severity, HNDL score, description and remediation.' },
+          { icon: '🧠', text: 'Hit "Generate Detailed AI Blueprint" to get a tailored 8-step PQC migration plan for that exact finding.' },
+          { icon: '🛡️', text: 'High-risk findings show an "INSTANT FIX" callout — one click downloads a ready-to-deploy PQC Docker config.' },
+          { icon: '⚖️', text: 'Expand compliance tags on a finding to see which NIST, RBI or CERT-IN controls it violates.' },
+        ]}
+      />
     </div>
   )
 }
