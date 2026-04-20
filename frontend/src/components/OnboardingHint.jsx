@@ -16,7 +16,14 @@ export default function OnboardingHint({ hintKey, icon, title, tips }) {
 
   // ── Mount: show if never seen ────────────────────────────────
   useEffect(() => {
-    if (localStorage.getItem(KEY_PREFIX + hintKey)) return
+    const isDismissed = localStorage.getItem(KEY_PREFIX + hintKey + '_dismissed')
+    if (isDismissed) return
+
+    const views = parseInt(localStorage.getItem(KEY_PREFIX + hintKey + '_views') || '0', 10)
+    if (views >= 5) return
+
+    // Increment views and show
+    localStorage.setItem(KEY_PREFIX + hintKey + '_views', (views + 1).toString())
     const t = setTimeout(() => setVisible(true), 500)
     return () => clearTimeout(t)
   }, [hintKey])
@@ -40,8 +47,7 @@ export default function OnboardingHint({ hintKey, icon, title, tips }) {
       setIdx(prev => {
         const next = prev + 1
         if (next >= tips.length) {
-          // All tips done — dismiss
-          localStorage.setItem(KEY_PREFIX + hintKey, '1')
+          // All tips done — just hide (it counts as 1 view)
           setVisible(false)
           return prev
         }
@@ -59,7 +65,7 @@ export default function OnboardingHint({ hintKey, icon, title, tips }) {
   const dismiss = () => {
     clearTimeout(timerRef.current)
     cancelAnimationFrame(rafRef.current)
-    localStorage.setItem(KEY_PREFIX + hintKey, '1')
+    localStorage.setItem(KEY_PREFIX + hintKey + '_dismissed', '1')
     setVisible(false)
   }
 
