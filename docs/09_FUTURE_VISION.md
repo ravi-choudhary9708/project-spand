@@ -19,7 +19,7 @@ The reality is:
 
 ## What We're Building: One-Click Quantum Migration
 
-### Phase 1 — PQC Sidecar Proxy *(Already Shipped ✅)*
+### Phase 1 — PQC Sidecar Proxy *(Already Shipped )*
 We already generate Docker-based PQC proxy configurations that wrap legacy servers in quantum-safe TLS without touching backend code:
 
 ```
@@ -57,8 +57,7 @@ Internet → [PQC Sidecar: TLS 1.3 + ML-KEM] → [Legacy Server: RSA-2048]
 └────────────────────────────────────────────────────────────┘
 ```
 
-No other tool does this. This is QuantumShield's **unfair advantage** — we don't just tell you the building is on fire, we put it out.
-
+No other tool does this. This is QuantumShield's **unfair advantage** 
 ---
 
 ## Impact
@@ -72,4 +71,4 @@ No other tool does this. This is QuantumShield's **unfair advantage** — we don
 
 ---
 
-*From detection to protection — that's our north star.* 🛡️
+
