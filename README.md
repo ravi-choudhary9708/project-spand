@@ -519,6 +519,8 @@ Requires PostgreSQL and Redis running locally. Update `DATABASE_URL` and `REDIS_
 | Muskan Kumari | Tester |
 | Gautam Singhal | Design & Research |
 
+demo video: https://youtu.be/_cSqJylmmh8
+
 ---
 
 ##  License
