@@ -1865,6 +1865,116 @@ def _run_testssl(domain: str, port: int = 443, starttls: Optional[str] = None, i
     if _openssl_available():
         return _openssl_tls_scan(domain, port, starttls)
     return _python_tls_scan(domain, port)
+import base64
+import struct
+
+def _get_ssh_key_size(algo: str, b64_key: str) -> Optional[int]:
+    try:
+        raw = base64.b64decode(b64_key)
+        if len(raw) < 4: return None
+        algo_len = struct.unpack(">I", raw[:4])[0]
+        offset = 4 + algo_len
+        
+        if algo == "ssh-rsa":
+            if len(raw) < offset + 4: return None
+            e_len = struct.unpack(">I", raw[offset:offset+4])[0]
+            offset += 4 + e_len
+            
+            if len(raw) < offset + 4: return None
+            n_len = struct.unpack(">I", raw[offset:offset+4])[0]
+            offset += 4
+            
+            n_bytes = raw[offset:offset+n_len]
+            n_int = int.from_bytes(n_bytes, "big")
+            return n_int.bit_length()
+        
+        elif algo == "ssh-ed25519":
+            return 256
+        elif algo.startswith("ecdsa-sha2-nistp"):
+            if "256" in algo: return 256
+            if "384" in algo: return 384
+            if "521" in algo: return 521
+            return 256
+    except Exception:
+        pass
+    return None
+
+def _run_ssh_scan(domain: str, ip_address: Optional[str], port: int = 22) -> Dict[str, Any]:
+    target = ip_address if ip_address else domain
+    cmd = ["ssh-keyscan", "-v", "-p", str(port), target]
+    result = run_command(cmd, timeout=10)
+    
+    scan_result = {
+        "domain": domain,
+        "port": port,
+        "tls_version": "SSH-2.0",
+        "cipher_suite": None,
+        "certificates": [],
+        "cipher_suites": [],
+        "supported_versions": ["SSH-2.0"],
+        "error": None,
+        "scan_method": "ssh-keyscan",
+        "algorithm_source": "ssh-keyscan",
+    }
+    
+    lines = result["stdout"].splitlines() + result["stderr"].splitlines()
+    best_algo = "RSA"
+    best_key_size = 2048
+    
+    # Priority for setting the "main" certificate algo
+    algo_priority = {"Ed25519": 3, "ECDSA": 2, "RSA": 1}
+    highest_priority = 0
+    
+    algos_found = False
+    
+    for line in lines:
+        if line.startswith("#") or not line.strip(): continue
+        parts = line.split()
+        if len(parts) >= 3:
+            raw_algo = parts[1]
+            b64_key = parts[2]
+            
+            algo_map = {
+                "ssh-rsa": "RSA",
+                "ecdsa-sha2-nistp256": "ECDSA",
+                "ecdsa-sha2-nistp384": "ECDSA",
+                "ecdsa-sha2-nistp521": "ECDSA",
+                "ssh-ed25519": "Ed25519"
+            }
+            mapped_algo = algo_map.get(raw_algo)
+            if not mapped_algo: continue
+            
+            algos_found = True
+            key_size = _get_ssh_key_size(raw_algo, b64_key) or 2048
+            
+            # Record it as a "cipher suite" 
+            scan_result["cipher_suites"].append({
+                "name": raw_algo,
+                "tls_version": "SSH-2.0",
+                "key_exchange": mapped_algo,
+                "port": port
+            })
+            
+            # Keep track of the strongest one for the main certificate
+            prio = algo_priority.get(mapped_algo, 0)
+            if prio > highest_priority:
+                highest_priority = prio
+                best_algo = mapped_algo
+                best_key_size = key_size
+                scan_result["cipher_suite"] = raw_algo
+
+    if algos_found:
+        scan_result["certificates"].append({
+            "algorithm": best_algo,
+            "key_size": best_key_size,
+            "subject": {"commonName": f"SSH Host Key ({best_algo})"},
+            "issuer": {"organizationName": "Self-Signed Host Key"},
+            "notAfter": None,
+            "serialNumber": "ssh-host-key",
+            "subjectAltName": []
+        })
+
+    return scan_result
 
 
 # ─────────────────────────────────────────
@@ -1966,7 +2076,7 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
     # ───────────────────────────────────────────────
     primary_tls_data = None
     tls_scan_targets = []
-    SKIP_TLS_PORTS = {80, 22, 53}
+    SKIP_TLS_PORTS = {80, 53}
 
     for port_num in sorted(port_numbers):
         if port_num in TLS_PORTS and port_num not in SKIP_TLS_PORTS:
@@ -1982,18 +2092,20 @@ def scan_asset(domain: str, progress_callback=None) -> Dict[str, Any]:
 
     for scan_port, starttls in tls_scan_targets:
 
-        # SSH does not use TLS — skip cert extraction but note the port
         if scan_port == 22:
-            logger.info(f"[scan] Skipping TLS cert extraction for SSH port 22 on {domain}")
-            continue
-
-        logger.info(f"[scan] TLS scanning {domain}:{scan_port} (starttls={starttls})")
-
-        try:
-            tls_data = run_tls_scan(domain, scan_port, starttls, ip_address=target_ip if not result["is_cdn"] else None)
-        except Exception as e:
-            logger.warning(f"[scan] TLS scan failed on {domain}:{scan_port}: {e}")
-            continue
+            logger.info(f"[scan] Running SSH cryptographic scan on port 22 for {domain}")
+            try:
+                tls_data = _run_ssh_scan(domain, target_ip if not result["is_cdn"] else None, scan_port)
+            except Exception as e:
+                logger.warning(f"[scan] SSH scan failed on {domain}:{scan_port}: {e}")
+                continue
+        else:
+            logger.info(f"[scan] TLS scanning {domain}:{scan_port} (starttls={starttls})")
+            try:
+                tls_data = run_tls_scan(domain, scan_port, starttls, ip_address=target_ip if not result["is_cdn"] else None)
+            except Exception as e:
+                logger.warning(f"[scan] TLS scan failed on {domain}:{scan_port}: {e}")
+                continue
 
         # Use the first successful TLS result as primary (highest-priority port)
         if primary_tls_data is None and (tls_data.get("certificates") or tls_data.get("cipher_suite")):
