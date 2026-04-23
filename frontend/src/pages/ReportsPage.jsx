@@ -1,6 +1,4 @@
-// ReportsPage.jsx — QuantumShield
-// Comprehensive, print-ready security posture reporting
-// Clickable drill-down on cards, charts, and compliance violations
+
 
 import { useState, useEffect } from "react";
 import {

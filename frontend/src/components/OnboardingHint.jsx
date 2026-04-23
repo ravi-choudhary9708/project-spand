@@ -1,7 +1,4 @@
-/**
- * OnboardingToast v3 — simplified, stable timer logic
- * Bumped prefix → hintv3_ to reset all dismissed state
- */
+
 import { useEffect, useRef, useState } from 'react'
 
 const KEY_PREFIX = 'hintv3_'

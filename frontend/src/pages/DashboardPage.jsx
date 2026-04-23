@@ -1,7 +1,4 @@
-// DashboardPage.jsx — QuantumShield
-// Place at: frontend/src/pages/DashboardPage.jsx
-// Management sees executive summary only.
-// Analyst/SOC/Admin sees full technical dashboard.
+
 
 import { useState, useEffect } from "react";
 import {
